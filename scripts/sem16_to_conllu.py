@@ -2,7 +2,7 @@ from collections import defaultdict
 
 root = 'root'
 #===============================================================
-def to_conllu(sdp_filename, conllu_filename):
+def sem16_to_conllu(sdp_filename, conllu_filename):
   """"""
 
   with open(sdp_filename) as f:
@@ -36,4 +36,4 @@ if __name__ == '__main__':
   """"""
 
   import sys
-  to_conllu(sys.argv[1], sys.argv[2])
+  sem16_to_conllu(sys.argv[1], sys.argv[2])
