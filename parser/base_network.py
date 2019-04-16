@@ -78,9 +78,13 @@ class BaseNetwork(object):
         else:
           VocabClass = getattr(vocabs, input_vocab_classname)
           vocab = VocabClass(config=config)
-          if input_vocab_classname == 'FormMultivocab' and vocab.use_elmo_vocab:
-            self._use_elmo = True
-            self.elmo_vocabs = vocab._elmo_vocabs
+          if input_vocab_classname == 'FormMultivocab':
+            if vocab.use_pretrained_vocab:
+              self._use_pretrained_vocab = True
+              self.pretrained_vocabs = vocab._pretrained_vocabs
+            if vocab.use_elmo_vocab:
+              self._use_elmo = True
+              self.elmo_vocabs = vocab._elmo_vocabs
           vocab.load() or vocab.count(self.train_conllus)
           self._input_vocabs.append(vocab)
           extant_vocabs[input_vocab_classname] = vocab
@@ -171,12 +175,18 @@ class BaseNetwork(object):
     with tf.Session(config=config) as sess:
       for saver, path in zip(input_network_savers, input_network_paths):
         saver.restore(sess, path)
+      feed_dict = {}
       if self.use_elmo:
+        feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
+      if self.use_pretrained_vocab:
+        feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.embed_placeholder[0].embeddings
         #print ('elmo vocabs:',self.elmo_vocabs)
         #sess.run(tf.global_variables_initializer())
-        sess.run(tf.global_variables_initializer(), feed_dict={self.elmo_vocabs[0].embed_placeholder:self.elmo_vocabs[0].embeddings})
-      else:
-        sess.run(tf.global_variables_initializer())
+        #sess.run(tf.global_variables_initializer(), 
+        #  feed_dict={self.pretrained_vocabs[0].embed_placeholder:self.embed_placeholder[0].embeddings,
+        #  self.elmo_vocabs[0].embed_placeholder:self.elmo_vocabs[0].embeddings})
+      #else:
+      sess.run(tf.global_variables_initializer(), feed_dict=feed_dict)
       #---
       os.makedirs(os.path.join(self.save_dir, 'profile'))
       options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
@@ -294,10 +304,12 @@ class BaseNetwork(object):
     with tf.Session(config=config) as sess:
       with Timer('Initializing non_save variables'):
         print(list(non_save_variables))
-        if not self.use_elmo:
-          sess.run(tf.variables_initializer(list(non_save_variables)))
-        else:
-          sess.run(tf.variables_initializer(list(non_save_variables)), feed_dict={self.elmo_vocabs[0].embed_placeholder:self.elmo_vocabs[0].embeddings})
+        feed_dict = {}
+      if self.use_elmo:
+        feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
+      if self.use_pretrained_vocab:
+        feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.embed_placeholder[0].embeddings
+      sess.run(tf.global_variables_initializer(), feed_dict=feed_dict)
       with Timer('Restoring save variables'):
         saver.restore(sess, tf.train.latest_checkpoint(self.save_dir))
       if len(conllu_files) == 1 or output_filename is not None:
