@@ -79,8 +79,9 @@ class BaseNetwork(object):
           VocabClass = getattr(vocabs, input_vocab_classname)
           vocab = VocabClass(config=config)
           if input_vocab_classname == 'FormMultivocab':
+            print ("pretrained_vocab", vocab.use_pretrained_vocab)
             if vocab.use_pretrained_vocab:
-              self._use_pretrained_vocab = True
+              self._use_pretrained = True
               self.pretrained_vocabs = vocab._pretrained_vocabs
             if vocab.use_elmo_vocab:
               self._use_elmo = True
@@ -178,8 +179,8 @@ class BaseNetwork(object):
       feed_dict = {}
       if self.use_elmo:
         feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
-      if self.use_pretrained_vocab:
-        feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.embed_placeholder[0].embeddings
+      if self.use_pretrained:
+        feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.pretrained_vocabs[0].embeddings
         #print ('elmo vocabs:',self.elmo_vocabs)
         #sess.run(tf.global_variables_initializer())
         #sess.run(tf.global_variables_initializer(), 
@@ -307,8 +308,8 @@ class BaseNetwork(object):
         feed_dict = {}
       if self.use_elmo:
         feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
-      if self.use_pretrained_vocab:
-        feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.embed_placeholder[0].embeddings
+      if self.use_pretrained:
+        feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.pretrained_vocabs[0].embeddings
       sess.run(tf.global_variables_initializer(), feed_dict=feed_dict)
       with Timer('Restoring save variables'):
         saver.restore(sess, tf.train.latest_checkpoint(self.save_dir))
@@ -475,6 +476,9 @@ class BaseNetwork(object):
   @property
   def other_save_dirs(self):
     return self._config.getlist(self, 'other_save_dirs')
+  @property
+  def use_pretrained(self):
+    return self._use_pretrained
   @property
   def use_elmo(self):
     return self._use_elmo
