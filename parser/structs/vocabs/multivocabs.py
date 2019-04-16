@@ -65,6 +65,7 @@ class Multivocab(BaseVocab, list):
     
     # Set up the pretrained vocab(s)
     use_pretrained_vocab = config.getboolean(self, 'use_pretrained_vocab')
+    self._use_pretrained_vocab = use_pretrained_vocab
     pretrained_files = config.getlist(self, 'pretrained_files')
     names = config.getlist(self, 'names')
     if use_pretrained_vocab:
@@ -78,7 +79,7 @@ class Multivocab(BaseVocab, list):
 
     # Set up the elmo vocab(s)
     use_elmo_vocab = config.getboolean(self, 'use_elmo_vocab')
-    self.use_elmo_vocab = use_elmo_vocab
+    self._use_elmo_vocab = use_elmo_vocab
     if use_elmo_vocab:
       elmo_vocabs = [self._elmo_vocab_class(config=config)]
       self.extend(elmo_vocabs)
@@ -218,6 +219,13 @@ class Multivocab(BaseVocab, list):
   @property
   def embed_keep_prob(self):
     return self._config.getfloat(self, 'embed_keep_prob')
+  @property
+  def use_pretrained_vocab(self):
+    return self._use_pretrained_vocab
+  @property
+  def use_elmo_vocab(self):
+    return self._use_elmo_vocab
+  
   
 #***************************************************************
 class FormMultivocab(Multivocab, cv.FormVocab):
