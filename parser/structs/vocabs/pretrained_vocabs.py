@@ -176,6 +176,8 @@ class PretrainedVocab(SetVocab):
       self[token] = cur_idx
       cur_idx += 1
     self._embedding_size = self._embeddings.shape[1]
+    shape = self._embeddings.shape
+    self._embed_placeholder = tf.placeholder(tf.float32, shape=[shape[0], shape[1]])
     self._loaded = True
     return True
 
