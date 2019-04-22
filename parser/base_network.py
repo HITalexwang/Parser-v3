@@ -79,7 +79,6 @@ class BaseNetwork(object):
           VocabClass = getattr(vocabs, input_vocab_classname)
           vocab = VocabClass(config=config)
           if input_vocab_classname == 'FormMultivocab':
-            print ("pretrained_vocab", vocab.use_pretrained_vocab)
             if vocab.use_pretrained_vocab:
               self._use_pretrained = True
               self.pretrained_vocabs = vocab._pretrained_vocabs
