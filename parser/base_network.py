@@ -522,7 +522,7 @@ class BaseNetwork(object):
     graph_outputs.restart_timer()
     collects = []
     for i, indices in enumerate(dataset.batch_iterator(shuffle=False)):
-      with Timer('Parsing batch %d' % i):
+      with Timer('Parsing batch %d (Main Model)' % i):
         tokens, lengths = dataset.get_tokens(indices)
         feed_dict = dataset.set_placeholders(indices)
         probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
@@ -533,7 +533,7 @@ class BaseNetwork(object):
       #print ("### Loading model {} for predicting ###".format(n+1))
       saver.restore(sess, tf.train.latest_checkpoint(save_dir))
       for i, collect in enumerate(collects):
-        with Timer('Parsing batch %d' % i):
+        with Timer('Parsing batch %d (Other Model %d)' % (i, n+1)):
           feed_dict = dataset.set_placeholders(collect['indices'])
           probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
           for field in probabilities:
@@ -542,7 +542,7 @@ class BaseNetwork(object):
     for i, collect in enumerate(collects):
       for field in collect['probs']:
         collect['probs'][field] /= len(self.other_save_dirs)+1
-      with Timer('Parsing batch %d' % i):
+      with Timer('Collecting batch %d' % i):
         predictions = graph_outputs.probs_to_preds(collect['probs'], collect['lengths'])
         collect['tokens'].update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
         graph_outputs.cache_predictions(collect['tokens'], collect['indices'])

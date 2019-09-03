@@ -118,9 +118,14 @@ if __name__ == '__main__':
   3 了 了 AS  AS  _ 2 3_mDepd 2:3_mDepd _
   4 。 。 PU  PU  _ 2 3_mPunc 2:3_mPunc _
   """
-  save_dir = '/mnt/hgfs/share/huawei/sdp-char-v0'
-  other_save_dirs = '/mnt/hgfs/share/huawei/sdp-char-v1'
+  argparser = ArgumentParser('Network')
+  argparser.add_argument('save_dir', type=str, help='path to the main model (with the embedding)')
+  argparser.add_argument('--other_save_dirs', type=str, help='paths to other models (split with ``:``)')
+  args = argparser.parse_args()
+
+  #save_dir = '/mnt/hgfs/share/huawei/sdp-char-v0'
+  #other_save_dirs = '/mnt/hgfs/share/huawei/sdp-char-v1'
   example = [[("早起","AD"),("使","VV"),("人","NN"),("健康","VV")],
              [("村庄","NN"),("惊醒","VV"),("了","AS"),("。","PU")]]
-  parser = Biaffine_Parser(save_dir, other_save_dirs=other_save_dirs)
+  parser = Biaffine_Parser(args.save_dir, other_save_dirs=args.other_save_dirs)
   print (parser.parse(example))
