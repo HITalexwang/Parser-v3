@@ -210,7 +210,7 @@ class GraphOutputs(object):
       # (n x m x m x c)
       semgraph_probs = probabilities['semgraph']
       if self._factored_semgraph and self.decoder == 'sem16':
-        print ('### Decoder:sem16 ###')
+        #print ('### Decoder:sem16 ###')
         semgraph_preds = self.sem16decoder(semgraph_probs, lengths)
       elif self._factored_semgraph:
         # (n x m x m x c) -> (n x m x m)
@@ -281,7 +281,7 @@ class GraphOutputs(object):
           new_head = np.argmax(semhead_probs[i,j,1:length]) + 1
           masked_semhead_preds[i,j,new_head] = 1
           #print ('new graph:\n',masked_semhead_preds[i])
-    print ('Corrected List:','\t'.join([key+':'+str(val) for key,val in n_counts.items()]))
+    #print ('Corrected List:','\t'.join([key+':'+str(val) for key,val in n_counts.items()]))
     # (n x m x m x c) -> (n x m x m)
     semrel_preds = np.argmax(semgraph_probs, axis=-1)
     # (n x m x m) (*) (n x m x m) -> (n x m x m)
@@ -343,6 +343,30 @@ class GraphOutputs(object):
       f.write('\n')
     self.predictions = {'indices': []}
     return
+
+  #=============================================================
+  def get_current_predictions(self):
+    """"""
+    
+    order = np.argsort(self.predictions['indices'])
+    fields = ['form', 'lemma', 'upos', 'xpos', 'ufeats', 'dephead', 'deprel', 'semrel', 'misc']
+    predictions = []
+    for i in order:
+      j = 1
+      token = []
+      tokens = []
+      while j < len(self.predictions['id'][i]):
+        token = [self.predictions['id'][i][j]]
+        for field in fields:
+          if field in self.predictions:
+            token.append(self.predictions[field][i][j])
+          else:
+            token.append('_')
+        tokens.append(token)
+        j += 1
+      predictions.append(tokens)
+    self.predictions = {'indices': []}
+    return predictions
   
   #=============================================================
   def compute_token_accuracy(self, field):

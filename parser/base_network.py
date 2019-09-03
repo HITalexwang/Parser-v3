@@ -79,7 +79,7 @@ class BaseNetwork(object):
           VocabClass = getattr(vocabs, input_vocab_classname)
           vocab = VocabClass(config=config)
           if input_vocab_classname == 'FormMultivocab':
-            print ("pretrained_vocab", vocab.use_pretrained_vocab)
+            #print ("pretrained_vocab", vocab.use_pretrained_vocab)
             if vocab.use_pretrained_vocab:
               self._use_pretrained = True
               self.pretrained_vocabs = vocab._pretrained_vocabs
@@ -304,7 +304,7 @@ class BaseNetwork(object):
     config.allow_soft_placement = True
     with tf.Session(config=config) as sess:
       with Timer('Initializing non_save variables'):
-        print(list(non_save_variables))
+        #print(list(non_save_variables))
         feed_dict = {}
       if self.use_elmo:
         feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
@@ -315,7 +315,7 @@ class BaseNetwork(object):
         saver.restore(sess, tf.train.latest_checkpoint(self.save_dir))
       if len(conllu_files) == 1 or output_filename is not None:
         with Timer('Parsing file'):
-          if self.other_save_dirs is None:
+          if not self.other_save_dirs:
             self.parse_file(parseset, parse_outputs, sess, output_dir=output_dir, output_filename=output_filename)
           else:
             self.parse_file_ensemble(parseset, parse_outputs, sess, saver, output_dir=output_dir, output_filename=output_filename)
@@ -447,6 +447,111 @@ class BaseNetwork(object):
       n_files = len(dataset.conllu_files)
       print('\033[92mParsing {} file{} took {:0.1f} seconds\033[0m'.format(n_files, 's' if n_files > 1 else '', time.time() - graph_outputs.time))
     return
+
+  #=============================================================
+  def parse_wrapper(self, sentences):
+    """"""
+
+    with Timer('Building dataset'):
+      parseset = conllu_dataset.CoNLLUAPI(sentences, self.vocabs,
+                                              config=self._config)
+    factored_deptree = None
+    factored_semgraph = None
+    for vocab in self.output_vocabs:
+      if vocab.field == 'deprel':
+        factored_deptree = vocab.factorized
+      elif vocab.field == 'semrel':
+        factored_semgraph = vocab.factorized
+    with Timer('Building TF'):
+      with tf.variable_scope(self.classname, reuse=False):
+        parse_graph = self.build_graph(reuse=True)
+        parse_outputs = DevOutputs(*parse_graph, load=False, factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+      parse_tensors = parse_outputs.accuracies
+      all_variables = set(tf.global_variables())
+      non_save_variables = set(tf.get_collection('non_save_variables'))
+      save_variables = all_variables - non_save_variables
+      saver = tf.train.Saver(list(save_variables), max_to_keep=1)
+
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    config.allow_soft_placement = True
+    with tf.Session(config=config) as sess:
+      with Timer('Initializing non_save variables'):
+        #print(list(non_save_variables))
+        feed_dict = {}
+      if self.use_elmo:
+        feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
+      if self.use_pretrained:
+        feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.pretrained_vocabs[0].embeddings
+      sess.run(tf.global_variables_initializer(), feed_dict=feed_dict)
+      with Timer('Restoring save variables'):
+        saver.restore(sess, tf.train.latest_checkpoint(self.save_dir))
+      with Timer('Parsing file'):
+        if not self.other_save_dirs:
+          predictions = self.parse_file_wrapper(parseset, parse_outputs, sess)
+        else:
+          predictions = self.parse_file_ensemble_wrapper(parseset, parse_outputs, sess, saver)
+    return predictions
+
+  #=============================================================
+  def parse_file_wrapper(self, dataset, graph_outputs, sess, print_time=False):
+    """"""
+
+    probability_tensors = graph_outputs.probabilities
+    graph_outputs.restart_timer()
+    for i, indices in enumerate(dataset.batch_iterator(shuffle=False)):
+      with Timer('Parsing batch %d' % i):
+        tokens, lengths = dataset.get_tokens(indices)
+        feed_dict = dataset.set_placeholders(indices)
+        probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
+        predictions = graph_outputs.probs_to_preds(probabilities, lengths)
+        tokens.update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
+        graph_outputs.cache_predictions(tokens, indices)
+
+    with Timer('Dumping predictions'):
+      predictions_ = graph_outputs.get_current_predictions()
+    if print_time:
+      print('\033[92mParsing 1 file took {:0.1f} seconds\033[0m'.format(time.time() - graph_outputs.time))
+    return predictions_
+
+  #=============================================================
+  def parse_file_ensemble_wrapper(self, dataset, graph_outputs, sess, saver, print_time=False):
+    """"""
+
+    probability_tensors = graph_outputs.probabilities
+    graph_outputs.restart_timer()
+    collects = []
+    for i, indices in enumerate(dataset.batch_iterator(shuffle=False)):
+      with Timer('Parsing batch %d' % i):
+        tokens, lengths = dataset.get_tokens(indices)
+        feed_dict = dataset.set_placeholders(indices)
+        probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
+        collect = {'indices':indices, 'tokens':tokens, 'lengths':lengths, 'probs':probabilities}
+        collects.append(collect)
+
+    for n, save_dir in enumerate(self.other_save_dirs):
+      #print ("### Loading model {} for predicting ###".format(n+1))
+      saver.restore(sess, tf.train.latest_checkpoint(save_dir))
+      for i, collect in enumerate(collects):
+        with Timer('Parsing batch %d' % i):
+          feed_dict = dataset.set_placeholders(collect['indices'])
+          probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
+          for field in probabilities:
+            collect['probs'][field] += probabilities[field]
+
+    for i, collect in enumerate(collects):
+      for field in collect['probs']:
+        collect['probs'][field] /= len(self.other_save_dirs)+1
+      with Timer('Parsing batch %d' % i):
+        predictions = graph_outputs.probs_to_preds(collect['probs'], collect['lengths'])
+        collect['tokens'].update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
+        graph_outputs.cache_predictions(collect['tokens'], collect['indices'])
+
+    with Timer('Dumping predictions'):
+      predictions_ = graph_outputs.get_current_predictions()
+    if print_time:
+      print('\033[92mParsing 1 file took {:0.1f} seconds\033[0m'.format(time.time() - graph_outputs.time))
+    return predictions_
 
   #=============================================================
   def get_input_tensor(self, outputs, reuse=True):

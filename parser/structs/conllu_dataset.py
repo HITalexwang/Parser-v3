@@ -246,3 +246,28 @@ class CoNLLUTestset(CoNLLUDataset):
   setname = 'test'
   def __init__(self, *args, config=None, **kwargs):
     super(CoNLLUTestset, self).__init__(config.getfiles(self, 'test_conllus'), *args, config=config, **kwargs)
+
+# Load sentence from input
+class CoNLLUAPI(CoNLLUDataset):
+  def __init__(self, sentences, vocabs, config=None):
+    """"""
+    
+    super(CoNLLUDataset, self).__init__(vocabs)
+    
+    self._multibucket = DictMultibucket(vocabs, max_buckets=config.getint(self, 'max_buckets'), config=config)
+    self._is_open = False
+    self._config = config
+    self._sentences = sentences
+    
+    self.load_next()
+    return
+
+  #=============================================================
+  def load_next(self):
+    """"""
+
+    with self.open():
+      for sid, sent in enumerate(self._sentences):
+      #for sent in self.itersents(self.conllu_files[file_idx]):
+        self.add(sent, sid)
+    return
