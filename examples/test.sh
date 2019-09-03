@@ -4,7 +4,7 @@ out=$2
 file=$3
 other=$4
 if [[ -z $2 || $1 == '-h' ]];then
-  echo "usage:./run.sh (model dir) (output filename) (input filename) (other model dirs)"
+  echo "params: (model dir) (output filename) (input filename) (other model dirs)"
   exit
 fi
 #CUDA_VISIBLE_DEVICES=$gpu 

@@ -3,7 +3,7 @@ save=$1
 config=$2
 log=$3
 if [[ -z $2 || $1 == '-h' ]];then
-  echo "usage:./run.sh (model dir) (config file) (log file)"
+  echo "params: (model dir) (config file) (log file)"
   exit
 fi
 #CUDA_VISIBLE_DEVICES=$gpu 
