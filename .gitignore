@@ -5,9 +5,11 @@
 *.old.py
 
 # Data directory
-data/
+#data/
 saves/
 *.tar.gz
 
 # Debug information
 *.log
+output/
+tmp/

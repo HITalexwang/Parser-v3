@@ -1,0 +1,9 @@
+1	早起	早起	AD	AD	_	2	3_Exp	2:3_Exp	_
+2	使	使	VV	VV	_	0	Root	0:Root	_
+3	人	人	NN	NN	_	2	3_Datv	2:3_Datv|4:3_Exp	_
+4	健康	健康	VV	VV	_	2	3_eEfft	2:3_eEfft	_
+
+1	村庄	村庄	NN	NN	_	2	3_Exp	2:3_Exp	_
+2	惊醒	惊醒	VV	VV	_	0	Root	0:Root	_
+3	了	了	AS	AS	_	2	3_mDepd	2:3_mDepd	_
+4	。	。	PU	PU	_	2	3_mPunc	2:3_mPunc	_

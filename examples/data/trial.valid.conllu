@@ -1,0 +1,52 @@
+1	我	我	PN	PN	_	2	3_Agt	2:3_Agt	_
+2	爱	爱	VV	VV	_	0	Root	0:Root	_
+3	他	他	PN	PN	_	4	3_Exp	4:3_Exp	_
+4	有	有	VE	VE	_	2	3_dCont	2:3_dCont	_
+5	志气	志气	NN	NN	_	4	3_Link	4:3_Link	_
+6	。	。	PU	PU	_	4	3_mPunc	4:3_mPunc	_
+
+1	我	我	PN	PN	_	8	3_Agt	8:3_Agt	_
+2	一定	一定	AD	AD	_	8	3_mDepd	8:3_mDepd	_
+3	在	在	P	P	_	4	3_mRela	4:3_mRela	_
+4	九点	九点	NT	NT	_	8	3_Time	8:3_Time	_
+5	以前	以前	LC	LC	_	4	3_mDepd	4:3_mDepd	_
+6	把	把	BA	BA	_	7	3_mRela	7:3_mRela	_
+7	文件	文件	NN	NN	_	8	3_Pat	8:3_Pat	_
+8	送到	送到	VV	VV	_	0	Root	0:Root	_
+9	。	。	PU	PU	_	8	3_mPunc	8:3_mPunc	_
+
+1	当时	当时	NT	NT	_	4	3_Time	4:3_Time	_
+2	的	的	DEG	DEG	_	1	3_mDepd	1:3_mDepd	_
+3	巴西	巴西	NR	NR	_	4	3_Mod	4:3_Mod	_
+4	总统	总统	NN	NN	_	6	3_Agt	6:3_Agt|12:3_Agt	_
+5	菲格雷特	菲格雷特	NR	NR	_	4	3_Mod	4:3_Mod	_
+6	穿	穿	VV	VV	_	0	Root	0:Root	_
+7	着	着	AS	AS	_	6	3_mDepd	6:3_mDepd	_
+8	黑色	黑色	JJ	JJ	_	9	3_Mod	9:3_Mod	_
+9	礼服	礼服	NN	NN	_	6	3_Cont	6:3_Cont	_
+10	，	，	PU	PU	_	6	3_mPunc	6:3_mPunc	_
+11	亲自	亲自	AD	AD	_	12	3_Mann	12:3_Mann	_
+12	主持	主持	VV	VV	_	6	3_eSymm	6:3_eSymm	_
+13	了	了	AS	AS	_	12	3_mDepd	12:3_mDepd	_
+14	这	这	DT	DT	_	15	3_Sco	15:3_Sco	_
+15	个	个	M	M	_	18	3_Meas	18:3_Meas	_
+16	特殊	特殊	VA	VA	_	18	3_Mod	18:3_Mod	_
+17	的	的	DEC	DEC	_	16	3_mDepd	16:3_mDepd	_
+18	葬礼	葬礼	NN	NN	_	12	3_Cont	12:3_Cont	_
+19	。	。	PU	PU	_	12	3_mPunc	12:3_mPunc	_
+
+1	明天	明天	NT	NT	_	4	3_Time	4:3_Time	_
+2	我	我	PN	PN	_	4	3_Agt	4:3_Agt|5:3_Agt	_
+3	将	将	AD	AD	_	4	3_mDepd	4:3_mDepd	_
+4	去	去	VV	VV	_	0	Root	0:Root	_
+5	看	看	VV	VV	_	4	3_eEfft	4:3_eEfft	_
+6	他	他	PN	PN	_	5	3_Datv	5:3_Datv	_
+7	。	。	PU	PU	_	5	3_mPunc	5:3_mPunc	_
+
+1	别	别	AD	AD	_	2	3_mNeg	2:3_mNeg	_
+2	用	用	VV	VV	_	5	3_mRela	5:3_mRela	_
+3	那	那	DT	DT	_	4	3_Sco	4:3_Sco	_
+4	支	支	M	M	_	5	3_Meas	5:3_Meas	_
+5	铅笔	铅笔	NN	NN	_	6	3_Tool	6:3_Tool	_
+6	写	写	VV	VV	_	0	Root	0:Root	_
+7	。	。	PU	PU	_	6	3_mPunc	6:3_mPunc	_
