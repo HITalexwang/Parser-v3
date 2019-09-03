@@ -31,9 +31,9 @@ from argparse import ArgumentParser
 
 from parser.config import Config
 import parser 
-from hpo import MVGHPO
+#from hpo import MVGHPO
 #from hpo.evals.syndep_eval import evaluate_tokens
-from hpo.evals.conll18_eval import evaluate
+#from hpo.evals.conll18_eval import evaluate
 
 section_names = set()
 with codecs.open(os.path.join('config', 'defaults.cfg')) as f:
@@ -81,16 +81,6 @@ def main():
   train_parser.add_argument('--config_file', default='')
   for section_name in section_names:
     train_parser.add_argument('--'+section_name, nargs='+')
-
-  hpo_parser = subparsers.add_parser('hpo')
-  hpo_parser.set_defaults(action=hpo)
-  hpo_parser.add_argument('network_class')
-  hpo_parser.add_argument('--noscreen', action='store_true')
-  hpo_parser.add_argument('--config_file', default='')
-  hpo_parser.add_argument('--rand_file', default='hpo/config/default.csv')
-  hpo_parser.add_argument('--eval_metric', default='LAS')
-  for section_name in section_names:
-    hpo_parser.add_argument('--'+section_name, nargs='+')
 
   # set up the hpo parser
   # set up the inference parser
@@ -167,77 +157,6 @@ def train(**kwargs):
   NetworkClass = getattr(parser, network_class)
   network = NetworkClass(input_networks=input_networks, config=config)
   network.train(load=load, noscreen=noscreen)
-  return
-
-#===============================================================
-# HPO
-def hpo(**kwargs):
-  """"""
-  
-  # Get the special arguments
-  noscreen = kwargs.pop('noscreen')
-  save_dir = kwargs.pop('save_dir')
-  save_metadir = kwargs.pop('save_metadir')
-  network_class = kwargs.pop('network_class')
-  config_file = kwargs.pop('config_file')
-  rand_file = kwargs.pop('rand_file')
-  eval_metric = kwargs.pop('eval_metric')
-  
-  # Get the cl-defined options
-  kwargs = {key: value for key, value in six.iteritems(kwargs) if value is not None}
-  for section, values in six.iteritems(kwargs):
-    if section in section_names:
-      values = [value.split('=', 1) for value in values]
-      kwargs[section] = {opt: value for opt, value in values}
-  if 'DEFAULT' not in kwargs:
-    kwargs['DEFAULT'] = {}
-  kwargs['DEFAULT']['network_class'] = network_class
-    
-  # Figure out the save_directory
-  if save_metadir is not None:
-    kwargs['DEFAULT']['save_metadir'] = save_metadir
-  if save_dir is None:
-    save_dir = Config(**kwargs).get('DEFAULT', 'save_dir')
-  if not os.path.exists(save_dir):
-    os.makedirs(save_dir)
-  
-  # Get the randomly generated options and possibly add them
-  #-------------------------------------------------------------
-  lang = kwargs['DEFAULT']['LANG']
-  treebank = kwargs['DEFAULT']['TREEBANK']
-  lc = kwargs['DEFAULT']['LC']
-  tb = kwargs['DEFAULT']['TB']
-  base = 'data/CoNLL18/UD_{}-{}/{}_{}-ud-dev.conllu'.format(lang, treebank, lc, tb)
-  def eval_func(save_dir):
-    return evaluate(base, os.path.join(save_dir, 'parsed', base), eval_metric)
-  #-------------------------------------------------------------
-  rargs = next(MVGHPO(rand_file, save_dir, eval_func=eval_func))
-  for section in rargs:
-    if section not in kwargs:
-      kwargs[section] = rargs[section]
-    else:
-      for option, value in six.iteritems(rargs[section]):
-        if option not in kwargs[section]:
-          kwargs[section][option] = value
-  save_dir = os.path.join(save_dir, str(int(time.time()*100000)))
-  
-  # If not loading, ask the user if they want to overwrite the directory
-  if os.path.isdir(save_dir):
-    print()
-    sys.exit(0)
-  else:
-    os.mkdir(save_dir)
-    os.system('git rev-parse HEAD >> {}'.format(os.path.join(save_dir, 'HEAD')))
-  
-  kwargs['DEFAULT']['save_dir'] = save_dir
-  config = Config(config_file=config_file, **kwargs)
-  network_list = config.get(network_class, 'input_network_classes')
-  with open(os.path.join(save_dir, 'config.cfg'), 'w') as f:
-    config.write(f)
-  input_networks, networks = resolve_network_dependencies(config, network_class, network_list, {})
-  NetworkClass = getattr(parser, network_class)
-  network = NetworkClass(input_networks=input_networks, config=config)
-  network.train(noscreen=noscreen)
   return
 
 #===============================================================

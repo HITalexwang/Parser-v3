@@ -17,9 +17,6 @@ from argparse import ArgumentParser
 
 from parser.config import Config
 import parser 
-from hpo import MVGHPO
-#from hpo.evals.syndep_eval import evaluate_tokens
-from hpo.evals.conll18_eval import evaluate
 
 class Biaffine_Parser(object):
   def __init__(self, save_dir, other_save_dirs=None):

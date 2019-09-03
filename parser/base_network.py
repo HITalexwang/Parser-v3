@@ -349,10 +349,11 @@ class BaseNetwork(object):
           output_dir = os.path.join(self.save_dir, 'parsed', input_dir)
         elif output_filename is None:
           output_filename = input_filename
+          output_filename = os.path.join(output_dir, output_filename)
         
         if not os.path.exists(output_dir):
           os.makedirs(output_dir)
-        output_filename = os.path.join(output_dir, output_filename)
+        #output_filename = os.path.join(output_dir, output_filename)
         with codecs.open(output_filename, 'w', encoding='utf-8') as f:
           graph_outputs.dump_current_predictions(f)
     if print_time:
@@ -403,10 +404,11 @@ class BaseNetwork(object):
           output_dir = os.path.join(self.save_dir, 'parsed', input_dir)
         elif output_filename is None:
           output_filename = input_filename
+          output_filename = os.path.join(output_dir, output_filename)
         
         if not os.path.exists(output_dir):
           os.makedirs(output_dir)
-        output_filename = os.path.join(output_dir, output_filename)
+        #output_filename = os.path.join(output_dir, output_filename)
         with codecs.open(output_filename, 'w', encoding='utf-8') as f:
           graph_outputs.dump_current_predictions(f)
     if print_time:
