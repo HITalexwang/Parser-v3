@@ -302,25 +302,61 @@ class GraphIndexVocab(IndexVocab):
     kwargs['placeholder_shape'] = [None, None, None]
     super(GraphIndexVocab, self).__init__(*args, **kwargs)
     return
-  
+
   #=============================================================
-  def get_bilinear_discriminator(self, layer, token_weights, variable_scope=None, reuse=False):
+  def get_hidden(self, layer, variable_scope=None, reuse=False, hidden_size=None, share=None,
+                  task_emb_size=None, task_scope=None):
     """"""
     
-    recur_layer = layer
+    if task_emb_size is not None and task_scope is not None:
+      layer_shape = nn.get_sizes(layer)
+      with tf.variable_scope(task_scope) as task_scope:
+        task_embed = tf.get_variable('TaskEmbed', shape=[task_emb_size], initializer=tf.zeros_initializer)
+        #print (task_embed.name)
+        task_matrix = tf.tile([[task_embed]], layer_shape[:-1] + [1])
+        layer = tf.concat([layer, task_matrix], -1)
+    #recur_layer = layer
     hidden_keep_prob = 1 if reuse else self.hidden_keep_prob
     add_linear = self.add_linear
     n_splits = 2*(1+self.linearize+self.distance)
-    with tf.variable_scope(variable_scope or self.field):
+    hidden_size = hidden_size or self.hidden_size
+    with tf.variable_scope(variable_scope or self.field, reuse=share) as hidden_scope:
       for i in six.moves.range(0, self.n_layers-1):
         with tf.variable_scope('FC-%d' % i):
-          layer = classifiers.hidden(layer, n_splits*self.hidden_size,
+          layer = classifiers.hidden(layer, n_splits*hidden_size,
                                      hidden_func=self.hidden_func,
                                      hidden_keep_prob=hidden_keep_prob)
       with tf.variable_scope('FC-top'):
-        layers = classifiers.hiddens(layer, n_splits*[self.hidden_size],
+        layers = classifiers.hiddens(layer, n_splits*[hidden_size],
                                      hidden_func=self.hidden_func,
                                      hidden_keep_prob=hidden_keep_prob)
+    return layers, task_scope, hidden_scope
+
+  #=============================================================
+  def get_bilinear_discriminator(self, layers, token_weights, variable_scope=None, reuse=False, 
+                                  hidden_size=None, share=None):
+    """"""
+
+    #recur_layer = layer
+    hidden_keep_prob = 1 if reuse else self.hidden_keep_prob
+    add_linear = self.add_linear
+
+    if isinstance(layers, tf.Tensor):
+      layer = layers
+      n_splits = 2*(1+self.linearize+self.distance)
+      hidden_size = hidden_size or self.hidden_size
+      with tf.variable_scope(variable_scope or self.field):
+        for i in six.moves.range(0, self.n_layers-1):
+          with tf.variable_scope('FC-%d' % i):
+            layer = classifiers.hidden(layer, n_splits*hidden_size,
+                                     hidden_func=self.hidden_func,
+                                     hidden_keep_prob=hidden_keep_prob)
+        with tf.variable_scope('FC-top'):
+          layers = classifiers.hiddens(layer, n_splits*[hidden_size],
+                                     hidden_func=self.hidden_func,
+                                     hidden_keep_prob=hidden_keep_prob)
+
+    with tf.variable_scope(variable_scope or self.field, reuse=share) as bilinear_scope:
       layer1, layer2 = layers.pop(0), layers.pop(0)
       if self.linearize:
         lin_layer1, lin_layer2 = layers.pop(0), layers.pop(0)
@@ -404,7 +440,14 @@ class GraphIndexVocab(IndexVocab):
         # Compute probabilities/cross entropy
         # (n x m x m) -> (n x m x m)
         probabilities = tf.nn.sigmoid(logits) * tf.to_float(token_weights)
-        # (n x m x m), (n x m x m), (n x m x m) -> ()
+        #fp_cost = np.maximum(.0, self.fp_cost)
+        #fn_cost = np.maximum(.0, self.fn_cost)
+        #if fp_cost + fn_cost > 0:
+          #print ("### In SemheadGraphIndexVocab : FP cost: {}, FN cost: {} ###".format(fp_cost, fn_cost))
+          # (n x m x m), (n x m x m), (n x m x m) -> () 
+          #loss = classifiers.sigmoid_cross_entropy(unlabeled_targets, logits, weights=token_weights, fp_cost=fp_cost, fn_cost=fn_cost)
+        #else:
+          #print ("### Using Tensorflow sigmoid cross entropy ###")
         loss = tf.losses.sigmoid_cross_entropy(unlabeled_targets, logits, weights=token_weights)
         n_tokens = tf.to_float(tf.reduce_sum(token_weights))
         if self.linearize:
@@ -433,6 +476,16 @@ class GraphIndexVocab(IndexVocab):
         # (n) x 2 -> ()
         n_correct_sequences = tf.reduce_sum(nn.equal(n_true_positives_per_sequence, n_targets_per_sequence))
     
+        #-----------------------------------------------------------
+        # Compute Numbers of Multi-head Tokens/Arcs
+        # (n x m x m) -> (n x m)
+        predictions_bytoken = tf.to_float(tf.reduce_sum(predictions, axis=-1))
+        # (n x m) -> (n x m)
+        non_locals = nn.greater(predictions_bytoken, 1, dtype=tf.float32)
+        # (n x m) -> ()
+        n_nonlocal_tokens = tf.reduce_sum(non_locals)
+        n_nonlocal_arcs = tf.reduce_sum(predictions_bytoken * non_locals)
+
     #-----------------------------------------------------------
     # Populate the output dictionary
     outputs = {}
@@ -451,7 +504,12 @@ class GraphIndexVocab(IndexVocab):
     outputs['n_false_positives'] = n_false_positives
     outputs['n_false_negatives'] = n_false_negatives
     outputs['n_correct_sequences'] = n_correct_sequences
-    return outputs
+
+    outputs['n_nonlocal_tokens'] = n_nonlocal_tokens
+    outputs['n_nonlocal_arcs'] = n_nonlocal_arcs
+    outputs['n_predictions'] = n_predictions
+    outputs['n_tokens'] = n_tokens
+    return outputs, bilinear_scope
   
   #=============================================================
   # token should be: 1:rel|2:acl|5:dep or 1|2|5
@@ -479,6 +537,14 @@ class GraphIndexVocab(IndexVocab):
     
     return '_'
   
+  #=============================================================
+  @property
+  def fp_cost(self):
+    return self._config.getfloat(self, 'fp_cost')
+  @property
+  def fn_cost(self):
+    return self._config.getfloat(self, 'fn_cost')
+
   #=============================================================
   def __getitem__(self, key):
     if isinstance(key, six.string_types):

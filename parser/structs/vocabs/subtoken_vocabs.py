@@ -51,7 +51,8 @@ class SubtokenVocab(CountVocab):
     return
 
   #=============================================================
-  def get_input_tensor(self, embed_keep_prob=None, nonzero_init=False, variable_scope=None, reuse=True):
+  def get_input_tensor(self, embed_keep_prob=None, nonzero_init=False, variable_scope=None, 
+                        reuse=True, aux_char=False):
     """"""
 
     embed_keep_prob = embed_keep_prob or self.embed_keep_prob
@@ -60,6 +61,7 @@ class SubtokenVocab(CountVocab):
     output_keep_prob = 1. if reuse else self.output_keep_prob
 
     layers = []
+    aux_layers = []
     with tf.variable_scope(variable_scope or self.classname) as scope:
       for i, placeholder in enumerate(self._multibucket.get_placeholders()):
         if i:
@@ -71,6 +73,7 @@ class SubtokenVocab(CountVocab):
                                                      placeholder,
                                                      nonzero_init=True,
                                                      reuse=reuse)
+        aux_layer = layer
 
         seq_lengths = tf.count_nonzero(placeholder, axis=1, dtype=tf.int32)
         for j in six.moves.range(self.n_layers):
@@ -117,6 +120,55 @@ class SubtokenVocab(CountVocab):
             layer = self.output_func(tf.reduce_sum(layer, axis=-2))
         #layer = tf.tf.Print(layer, [tf.shape(layer)])
         layers.append(layer)
+
+        # auxiliary char-level rnn
+        if aux_char:
+          with tf.variable_scope('Aux'):
+            for j in six.moves.range(self.n_layers):
+              conv_width = self.first_layer_conv_width if not j else self.conv_width
+              with tf.variable_scope('RNN-{}'.format(j)):
+                aux_layer, final_states = recurrent.directed_RNN(
+                  aux_layer, self.recur_size, seq_lengths,
+                  bidirectional=self.bidirectional,
+                  recur_cell=self.recur_cell,
+                  conv_width=conv_width,
+                  recur_func=self.recur_func,
+                  conv_keep_prob=conv_keep_prob,
+                  recur_keep_prob=recur_keep_prob,
+                  cifg=self.cifg,
+                  highway=self.highway,
+                  highway_func=self.highway_func,
+                  bilin=self.bilin)
+
+
+            if not self.squeeze_type.startswith('gated'):
+              if self.squeeze_type == 'linear_attention':
+                with tf.variable_scope('Attention'):
+                  _, aux_layer = classifiers.linear_attention(aux_layer, hidden_keep_prob=output_keep_prob)
+              elif self.squeeze_type == 'final_hidden':
+                aux_layer, _ = tf.split(final_states, 2, axis=-1)
+              elif self.squeeze_type == 'final_cell':
+                _, aux_layer = tf.split(final_states, 2, axis=-1)
+              elif self.squeeze_type == 'final_state':
+                aux_layer = final_states
+              elif self.squeeze_type == 'reduce_max':
+                aux_layer = tf.reduce_max(aux_layer, axis=-2)
+              with tf.variable_scope('Linear'):
+                aux_layer = classifiers.hidden(aux_layer, self.output_size,
+                                           hidden_func=self.output_func,
+                                           hidden_keep_prob=output_keep_prob)
+            else:
+              with tf.variable_scope('Attention'):
+                attn, aux_layer = classifiers.deep_linear_attention(aux_layer, self.output_size,
+                                           hidden_func=nonlin.identity,
+                                           hidden_keep_prob=output_keep_prob)
+              if self.squeeze_type == 'gated_reduce_max':
+                aux_layer = tf.nn.relu(tf.reduce_max(aux_layer, axis=-2)) + .1*tf.reduce_sum(aux_layer, axis=-2)/(tf.count_nonzero(aux_layer, axis=-2, dtype=tf.float32)+1e-12)
+              elif self.squeeze_type == 'gated_reduce_sum':
+                aux_layer = self.output_func(tf.reduce_sum(aux_layer, axis=-2))
+            #layer = tf.tf.Print(layer, [tf.shape(layer)])
+            aux_layers.append(aux_layer)
+
       # Concatenate all the buckets' embeddings
       layer = tf.concat(layers, 0)
       # Put them in the right order, creating the embedding matrix
@@ -125,17 +177,26 @@ class SubtokenVocab(CountVocab):
       #layer = tf.Print(layer, [tf.shape(layer)])
       # Get the embeddings from the embedding matrix
       layer = tf.nn.embedding_lookup(layer, self.placeholder)
-
       if embed_keep_prob < 1:
         layer = self.drop_func(layer, embed_keep_prob)
+
+      if aux_char:
+        aux_layer = tf.concat(aux_layers, 0)
+        aux_layer = tf.nn.embedding_lookup(aux_layer, self._multibucket.placeholder)
+        aux_layer = tf.nn.embedding_lookup(aux_layer, self.placeholder)
+        if embed_keep_prob < 1:
+          aux_layer = self.drop_func(aux_layer, embed_keep_prob)
+        return layer, aux_layer
+
     return layer
 
   #=============================================================
-  def count(self, train_conllus):
+  def count(self, train_conllus, aux_conllus=None):
     """"""
 
+    conllus = train_conllus + aux_conllus if aux_conllus is not None else train_conllus
     tokens = set()
-    for train_conllu in train_conllus:
+    for train_conllu in conllus:
       with codecs.open(train_conllu, encoding='utf-8', errors='ignore') as f:
         for line in f:
           line = line.strip()

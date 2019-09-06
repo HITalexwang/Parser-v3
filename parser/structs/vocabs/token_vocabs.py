@@ -239,6 +239,7 @@ class TokenVocab(CountVocab):
   def get_bilinear_classifier(self, layer, outputs, token_weights, variable_scope=None, reuse=False):
     """"""
     
+    outputs_ = outputs
     layer1 = layer2 = layer
     hidden_keep_prob = 1 if reuse else self.hidden_keep_prob
     hidden_func = self.hidden_func
@@ -273,8 +274,8 @@ class TokenVocab(CountVocab):
         # Process the targets
         # (n x m)
         label_targets = self.placeholder
-        unlabeled_predictions = outputs['unlabeled_predictions']
-        unlabeled_targets = outputs['unlabeled_targets']
+        unlabeled_predictions = outputs_['unlabeled_predictions']
+        unlabeled_targets = outputs_['unlabeled_targets']
         # (n x m) -> (n x m x m)
         unlabeled_predictions = tf.one_hot(unlabeled_predictions, bucket_size)
         unlabeled_targets = tf.one_hot(unlabeled_targets, bucket_size)
@@ -298,7 +299,7 @@ class TokenVocab(CountVocab):
         #-------------------------------------------------------
         # Compute probabilities/cross entropy
         # (n x m x m) -> (n x m x m x 1)
-        head_probabilities = tf.expand_dims(tf.stop_gradient(outputs['probabilities']), axis=-1)
+        head_probabilities = tf.expand_dims(tf.stop_gradient(outputs_['probabilities']), axis=-1)
         # (n x m x m x c) -> (n x m x m x c)
         label_probabilities = tf.nn.softmax(transposed_logits)
         # (n x m), (n x m x c), (n x m) -> ()
@@ -311,7 +312,7 @@ class TokenVocab(CountVocab):
         label_oracle_predictions = tf.argmax(oracle_logits, axis=-1, output_type=tf.int32)
         # (n x m) (*) (n x m) -> (n x m)
         correct_label_tokens = nn.equal(label_targets, label_oracle_predictions) * token_weights
-        correct_tokens = nn.equal(label_targets, label_predictions) * outputs['correct_unlabeled_tokens']
+        correct_tokens = nn.equal(label_targets, label_predictions) * outputs_['correct_unlabeled_tokens']
         
         # (n x m) -> (n)
         tokens_per_sequence = tf.reduce_sum(token_weights, axis=-1)
@@ -325,19 +326,19 @@ class TokenVocab(CountVocab):
     #-----------------------------------------------------------
     # Populate the output dictionary
     rho = self.loss_interpolation
-    outputs['label_targets'] = label_targets
+    outputs_['label_targets'] = label_targets
     # This way we can reconstruct the head_probabilities by exponentiating and summing along the last axis
-    outputs['probabilities'] = label_probabilities * head_probabilities
-    outputs['label_loss'] = label_loss
-    outputs['loss'] = 2*((1-rho) * outputs['loss'] + rho * label_loss)
+    outputs_['probabilities'] = label_probabilities * head_probabilities
+    outputs_['label_loss'] = label_loss
+    outputs_['loss'] = 2*((1-rho) * outputs_['loss'] + rho * label_loss)
     
-    outputs['label_predictions'] = label_predictions
-    outputs['n_correct_label_tokens'] = tf.reduce_sum(correct_label_tokens)
-    outputs['n_correct_label_sequences'] = tf.reduce_sum(correct_label_sequences)
-    outputs['n_correct_tokens'] = tf.reduce_sum(correct_tokens)
-    outputs['n_correct_sequences'] = tf.reduce_sum(correct_sequences)
+    outputs_['label_predictions'] = label_predictions
+    outputs_['n_correct_label_tokens'] = tf.reduce_sum(correct_label_tokens)
+    outputs_['n_correct_label_sequences'] = tf.reduce_sum(correct_label_sequences)
+    outputs_['n_correct_tokens'] = tf.reduce_sum(correct_tokens)
+    outputs_['n_correct_sequences'] = tf.reduce_sum(correct_sequences)
     
-    return outputs
+    return outputs_
   
   #=============================================================
   def get_bilinear_classifier_with_embeddings(self, layer, embeddings, token_weights, variable_scope=None, reuse=False):
@@ -488,10 +489,11 @@ class TokenVocab(CountVocab):
   
   #=============================================================
   # TODO make this compatible with zipped files
-  def count(self, train_conllus):
+  def count(self, train_conllus, aux_conllus=None):
     """"""
-    
-    for train_conllu in train_conllus:
+
+    conllus = train_conllus + aux_conllus if aux_conllus is not None else train_conllus
+    for train_conllu in conllus:
       with codecs.open(train_conllu, encoding='utf-8', errors='ignore') as f:
         for line in f:
           line = line.strip()
@@ -652,24 +654,57 @@ class GraphTokenVocab(TokenVocab):
     return outputs
   
   #=============================================================
-  def get_bilinear_classifier(self, layer, outputs, token_weights, variable_scope=None, reuse=False):
+  def get_hidden(self, layer, variable_scope=None, reuse=False, hidden_size=None, share=None,
+                  task_emb_size=None, task_scope=None):
     """"""
     
-    recur_layer = layer
+    if task_emb_size is not None and task_scope is not None:
+      layer_shape = nn.get_sizes(layer)
+      with tf.variable_scope(task_scope, reuse=True):
+        task_embed = tf.get_variable('TaskEmbed', shape=[task_emb_size], initializer=tf.zeros_initializer)
+        #print (task_embed.name)
+        task_matrix = tf.tile([[task_embed]], layer_shape[:-1] + [1])
+        layer = tf.concat([layer, task_matrix], -1)
+    #recur_layer = layer
     hidden_keep_prob = 1 if reuse else self.hidden_keep_prob
     add_linear = self.add_linear
-    with tf.variable_scope(variable_scope or self.field):
+    hidden_size = hidden_size or self.hidden_size
+    with tf.variable_scope(variable_scope or self.field, reuse=share) as hidden_scope:
       for i in six.moves.range(0, self.n_layers-1):
         with tf.variable_scope('FC-%d' % i):
-          layer = classifiers.hidden(layer, 2*self.hidden_size,
+          layer = classifiers.hidden(layer, 2*hidden_size,
                                       hidden_func=self.hidden_func,
                                       hidden_keep_prob=hidden_keep_prob)
       with tf.variable_scope('FC-top'):
-        layers = classifiers.hiddens(layer, 2*[self.hidden_size],
+        layers = classifiers.hiddens(layer, 2*[hidden_size],
                                     hidden_func=self.hidden_func,
                                     hidden_keep_prob=hidden_keep_prob)
+    return layers, hidden_scope
+
+  #=============================================================
+  def get_bilinear_classifier(self, layers, outputs, token_weights, variable_scope=None,
+                                reuse=False, share=None):
+    """"""
+    
+    #recur_layer = layer
+    hidden_keep_prob = 1 if reuse else self.hidden_keep_prob
+    add_linear = self.add_linear
+
+    if isinstance(layers, tf.Tensor):
+      layer = layers
+      with tf.variable_scope(variable_scope or self.field):
+        for i in six.moves.range(0, self.n_layers-1):
+          with tf.variable_scope('FC-%d' % i):
+            layer = classifiers.hidden(layer, 2*self.hidden_size,
+                                      hidden_func=self.hidden_func,
+                                      hidden_keep_prob=hidden_keep_prob)
+        with tf.variable_scope('FC-top'):
+          layers = classifiers.hiddens(layer, 2*[self.hidden_size],
+                                    hidden_func=self.hidden_func,
+                                    hidden_keep_prob=hidden_keep_prob)
+
+    with tf.variable_scope(variable_scope or self.field, reuse=share) as bilinear_scope:
       layer1, layer2 = layers.pop(0), layers.pop(0)
-      
       with tf.variable_scope('Classifier'):
         if self.diagonal:
           logits = classifiers.diagonal_bilinear_classifier(
@@ -740,7 +775,7 @@ class GraphTokenVocab(TokenVocab):
     outputs['n_correct_sequences'] = n_correct_sequences
     outputs['n_correct_label_tokens'] = n_correct_label_tokens
     outputs['n_correct_label_sequences'] = n_correct_label_sequences
-    return outputs
+    return outputs, bilinear_scope
   
   #=============================================================
   def get_unfactored_bilinear_classifier(self, layer, token_weights, variable_scope=None, reuse=False):

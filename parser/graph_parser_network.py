@@ -37,7 +37,7 @@ class GraphParserNetwork(BaseNetwork):
   """"""
   
   #=============================================================
-  def build_graph(self, input_network_outputs={}, reuse=True):
+  def build_graph(self, input_network_outputs={}, reuse=True, n_aux = 0):
     """"""
     
     with tf.variable_scope('Embeddings'):
@@ -107,12 +107,12 @@ class GraphParserNetwork(BaseNetwork):
         if vocab.factorized:
           head_vocab = output_fields['semhead']
           with tf.variable_scope('Unlabeled'):
-            unlabeled_outputs = head_vocab.get_bilinear_discriminator(
+            unlabeled_outputs, _ = head_vocab.get_bilinear_discriminator(
               layer,
               token_weights=token_weights3D,
               reuse=reuse)
           with tf.variable_scope('Labeled'):
-            labeled_outputs = vocab.get_bilinear_classifier(
+            labeled_outputs, _ = vocab.get_bilinear_classifier(
               layer, unlabeled_outputs,
               token_weights=token_weights3D,
               reuse=reuse)
@@ -124,7 +124,7 @@ class GraphParserNetwork(BaseNetwork):
         self._evals.add('semgraph')
       elif 'semhead' in output_fields:
         vocab = output_fields['semhead']
-        outputs[vocab.classname] = vocab.get_bilinear_classifier(
+        outputs[vocab.classname], _ = vocab.get_bilinear_classifier(
           layer,
           token_weights=token_weights3D,
           reuse=reuse)

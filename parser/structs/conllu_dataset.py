@@ -43,7 +43,8 @@ from parser.structs.buckets import DictMultibucket
 #***************************************************************
 class CoNLLUDataset(set):
   """"""
-  
+  setname = 'test'
+
   #=============================================================
   def __init__(self, conllu_files, vocabs, config=None):
     """"""
@@ -81,8 +82,9 @@ class CoNLLUDataset(set):
         file_idx = self._cur_file_idx
       
       with self.open():
-        for sent in self.itersents(self.conllu_files[file_idx]):
-          self.add(sent)
+        for sid, sent in enumerate(self.itersents(self.conllu_files[file_idx])):
+        #for sent in self.itersents(self.conllu_files[file_idx]):
+          self.add(sent, sid)
     return
   
   #=============================================================
@@ -97,7 +99,7 @@ class CoNLLUDataset(set):
     return self
     
   #=============================================================
-  def add(self, sent):
+  def add(self, sent, sid):
     """"""
     
     assert self._is_open, 'The CoNLLUDataset is not open for adding entries'
@@ -107,7 +109,13 @@ class CoNLLUDataset(set):
     for vocab in self:
       tokens = [line[vocab.conllu_idx] for line in sent]
       tokens.insert(0, vocab.get_root())
-      indices = vocab.add_sequence(tokens) # for graphs, list of (head, label) pairs
+      if 'FormMultivocab' in vocab.__class__.__name__:
+        poss = ['UNK']
+        for wid in range(len(sent)):
+          poss.append(self.setname+'-'+str(sid)+'-'+str(wid))
+        indices = vocab.add_sequence(tokens, poss)
+      else:
+        indices = vocab.add_sequence(tokens) # for graphs, list of (head, label) pairs
       sent_tokens[vocab.classname] = tokens
       sent_indices[vocab.classname] = indices
     self._multibucket.add(sent_indices, sent_tokens, length=len(sent)+1)
@@ -140,6 +148,7 @@ class CoNLLUDataset(set):
         batches.extend(np.array_split(subdata, n_splits))
     if shuffle:
       np.random.shuffle(batches)
+    #print ("Batch size:{}, Batch num:{}".format(self.batch_size,len(batches)))
     return iter(batches)
     
   #=============================================================
@@ -224,13 +233,22 @@ class CoNLLUDataset(set):
 
 #***************************************************************
 class CoNLLUTrainset(CoNLLUDataset):
+  setname = 'train'
   def __init__(self, *args, config=None, **kwargs):
     super(CoNLLUTrainset, self).__init__(config.getfiles(self, 'train_conllus'), *args, config=config, **kwargs)
 
 class CoNLLUDevset(CoNLLUDataset):
+  setname = 'dev'
   def __init__(self, *args, config=None, **kwargs):
     super(CoNLLUDevset, self).__init__(config.getfiles(self, 'dev_conllus'), *args, config=config, **kwargs)
 
 class CoNLLUTestset(CoNLLUDataset):
+  setname = 'test'
   def __init__(self, *args, config=None, **kwargs):
     super(CoNLLUTestset, self).__init__(config.getfiles(self, 'test_conllus'), *args, config=config, **kwargs)
+
+class CoNLLUAuxset(CoNLLUDataset):
+  setname = 'aux'
+  def __init__(self, conllu_file, *args, config=None, **kwargs):
+    #super(CoNLLUAuxset, self).__init__(config.getfiles(self, 'aux_conllus'), *args, config=config, **kwargs)
+    super(CoNLLUAuxset, self).__init__(conllu_file, *args, config=config, **kwargs)

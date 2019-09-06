@@ -54,9 +54,11 @@ class BaseVocab(object):
     return
 
   #=============================================================
-  def add_sequence(self, tokens):
+  def add_sequence(self, tokens, poss=None):
     """"""
 
+    if poss is not None:
+      return [self.add(token, pos) for token, pos in zip(tokens, poss)]
     return [self.add(token) for token in tokens]
 
   #=============================================================

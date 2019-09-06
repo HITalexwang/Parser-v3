@@ -54,9 +54,12 @@ class GraphOutputs(object):
                     ('semgraph', 'LF1')]
   
   #=============================================================
-  def __init__(self, outputs, tokens, load=False, evals=None, factored_deptree=None, factored_semgraph=None, config=None):
+  def __init__(self, outputs, tokens, load=False, evals=None, factored_deptree=None, 
+                factored_semgraph=None, config=None, dataset=None):
     """"""
     
+    if dataset is not None:
+      self._dataset = dataset
     self._factored_deptree = factored_deptree
     self._factored_semgraph = factored_semgraph
     self._config = config
@@ -93,6 +96,8 @@ class GraphOutputs(object):
                   'bats/sec': []}
         }
       for field in self._accuracies:
+        if 'n_nonlocal_tokens' in self._accuracies[field]:
+          self.history['nonlocal'] = {'n_nonlocal_tokens': 0}
         if field == 'semgraph':
           for string in ('head', 'graph'):
             self.history['sem'+string] = {
@@ -109,7 +114,15 @@ class GraphOutputs(object):
               'n_edges': 0,
               'sequences': [0]
             }
-            
+        elif field == 'auxgraph':
+          for string in ('head', 'graph'):
+            self.history['sem'+string] = {
+              'loss': [0],
+              'tokens': [0],
+              'fp_tokens': 0,
+              'fn_tokens': 0,
+              'sequences': [0]
+            }
         elif field == 'deptree':
           for string in ('head', 'tree'):
             self.history['dep'+string] = {
@@ -137,7 +150,9 @@ class GraphOutputs(object):
     """"""
     
     predictions = {}
-    
+    drop_arc = self.drop_arc if self.drop_arc > 0 else .5
+    #print ("### Keeping arcs with prob >= {:.2f} ###".format(self.drop_arc if self.drop_arc > 0 else .5))
+
     if 'form' in probabilities:
       form_probs = probabilities['form']
       if isinstance(form_probs, (tuple, list)):
@@ -214,7 +229,7 @@ class GraphOutputs(object):
         # (n x m x m x c) -> (n x m x m)
         semhead_probs = semgraph_probs.sum(axis=-1)
         # (n x m x m) -> (n x m x m)
-        semhead_preds = np.where(semhead_probs >= .5, 1, 0)
+        semhead_preds = np.where(semhead_probs >= drop_arc, 1, 0)
         # (n x m x m x c) -> (n x m x m)
         semrel_preds = np.argmax(semgraph_probs, axis=-1)
         # (n x m x m) (*) (n x m x m) -> (n x m x m)
@@ -234,16 +249,18 @@ class GraphOutputs(object):
     return predictions
   
   def sem16decoder(self, semgraph_probs, lengths):
+    drop_arc = self.drop_arc if self.drop_arc > 0 else .5
+    #print ("### Keeping arcs with prob >= {:.2f} ###".format(self.drop_arc if self.drop_arc > 0 else .5))
     # (n x m x m x c) -> (n x m x m)
     semhead_probs = semgraph_probs.sum(axis=-1)
     # (n x m x m) -> (n x m x m)
-    semhead_preds = np.where(semhead_probs >= .5, 1, 0)
+    semhead_preds = np.where(semhead_probs >= drop_arc, 1, 0)
     # (n x m x m)
     masked_semhead_preds = np.zeros(semhead_preds.shape, dtype=np.int32)
     # mask by length
     for i, (sem_preds, length) in enumerate(zip(semhead_preds, lengths)):
       masked_semhead_preds[i,:length,:length] = sem_preds[:length,:length]
-    n_counts = {'no_root':0, 'multi_root':0, 'no_head':0, 'self_circle':0}
+    n_counts = {'no_root':0, 'multi_root':0, 'no_head':0, 'self_circle':0, 'other_head_of_root':0}
     # for each sentence
     #for i in range(len(masked_semhead_preds)):
     for i, length in enumerate(lengths):
@@ -253,11 +270,18 @@ class GraphOutputs(object):
           n_counts['self_circle'] += 1
           masked_semhead_preds[i,j,j] = 0
           #print ('new graph:\n',masked_semhead_preds[i])
+        if masked_semhead_preds[i,j,0] == 1 and masked_semhead_preds[i,j,:].sum() > 1:
+          n_counts['other_head_of_root'] += 1
+          masked_semhead_preds[i,j,:] = 0
+          masked_semhead_preds[i,j,0] = 1
+
       n_root = np.sum(masked_semhead_preds[i,:,0])
       if n_root == 0:
         #print ('root:', n_root, '\n',masked_semhead_preds[i])
         n_counts['no_root'] += 1
         new_root = np.argmax(semhead_probs[i,1:,0]) + 1
+        # first remove the original head
+        masked_semhead_preds[i,new_root,:] = 0
         masked_semhead_preds[i,new_root,0] = 1
         #print ('new graph:\n', masked_semhead_preds[i])
       elif n_root > 1:
@@ -354,6 +378,13 @@ class GraphOutputs(object):
     precision = self.history[field]['tokens'][-1] / (self.history[field]['tokens'][-1] + self.history[field]['fp_tokens'] + 1e-12)
     recall = self.history[field]['tokens'][-1] / (self.history[field]['tokens'][-1] + self.history[field]['fn_tokens'] + 1e-12)
     return 2 * (precision * recall) / (precision + recall + 1e-12)
+
+  def compute_token_prf(self, field):
+    """"""
+    
+    precision = self.history[field]['tokens'][-1] / (self.history[field]['tokens'][-1] + self.history[field]['fp_tokens'] + 1e-12)
+    recall = self.history[field]['tokens'][-1] / (self.history[field]['tokens'][-1] + self.history[field]['fn_tokens'] + 1e-12)
+    return 2 * (precision * recall) / (precision + recall + 1e-12), precision, recall
   
   def compute_sequence_accuracy(self, field):
     """"""
@@ -405,6 +436,8 @@ class GraphOutputs(object):
     self.history['total']['n_tokens'] += outputs['total']['n_tokens']
     self.history['total']['n_sequences'] += outputs['total']['n_sequences']
     for field, output in six.iteritems(outputs):
+      if 'n_nonlocal_tokens' in output:
+        self.history['nonlocal']['n_nonlocal_tokens'] += output['n_nonlocal_tokens']
       if field == 'semgraph':
         if self._factored_semgraph:
           self.history['semrel']['loss'][-1] += output['label_loss']
@@ -432,6 +465,17 @@ class GraphOutputs(object):
         self.history['deptree']['loss'][-1] += output['loss']
         self.history['deptree']['tokens'][-1] += output['n_correct_tokens']
         self.history['deptree']['sequences'][-1] += output['n_correct_sequences']
+      elif field == 'auxgraph':
+        self.history['semhead']['loss'][-1] += output['unlabeled_loss']
+        self.history['semhead']['tokens'][-1] += output['n_unlabeled_true_positives']
+        self.history['semhead']['fp_tokens'] += output['n_unlabeled_false_positives']
+        self.history['semhead']['fn_tokens'] += output['n_unlabeled_false_negatives']
+        self.history['semhead']['sequences'][-1] += output['n_correct_unlabeled_sequences']
+        self.history['semgraph']['loss'][-1] += output['loss']
+        self.history['semgraph']['tokens'][-1] += output['n_true_positives']
+        self.history['semgraph']['fp_tokens'] += output['n_false_positives']
+        self.history['semgraph']['fn_tokens'] += output['n_false_negatives']
+        self.history['semgraph']['sequences'][-1] += output['n_correct_sequences']
       elif field != 'total':
         self.history[field]['loss'][-1] += output['loss']
         self.history[field]['tokens'][-1] += output['n_correct_tokens']
@@ -446,10 +490,12 @@ class GraphOutputs(object):
     n_tokens = self.history['total']['n_tokens']
     n_sequences = self.history['total']['n_sequences']
     total_time = self.history['total']['total_time']
+    n_nonlocal_tokens = self.history['nonlocal']['n_nonlocal_tokens']
     self.history['total']['n_batches'] = 0
     self.history['total']['n_tokens'] = 0
     self.history['total']['n_sequences'] = 0
     self.history['total']['total_time'] = 0
+    self.history['nonlocal']['n_nonlocal_tokens'] = 0
     
     #-----------------------------------------------------------
     if stdscr is not None:
@@ -463,7 +509,8 @@ class GraphOutputs(object):
         tokens = self.history[field]['tokens'][-1]
         if field in ('semgraph', 'semhead'):
           tp = self.history[field]['tokens'][-1]
-          self.history[field]['tokens'][-1] = self.compute_token_F1(field) * 100
+          self.history[field]['tokens'][-1], precision, recall = self.compute_token_prf(field)
+          self.history[field]['tokens'][-1] *= 100
         elif field == 'semrel':
           n_edges = self.history[field]['n_edges']
           self.history[field]['tokens'][-1] *= 100 / n_edges
@@ -492,6 +539,18 @@ class GraphOutputs(object):
           print('Acc: {:5.2f}'.format(acc), end='')
           print(' | ', end='')
           print('Seq: {:5.2f}\n'.format(acc_seq), end='')
+          if field == 'semhead':
+            print('{:5}'.format('PR'), end='')
+            print(' | ', end='')
+            print('UP: {:5.2f}'.format(precision*100), end='')
+            print(' | ', end='')
+            print('UR: {:5.2f}\n'.format(recall*100), end='')
+          elif field == 'semgraph':
+            print('{:5}'.format('PR'), end='')
+            print(' | ', end='')
+            print('LP: {:5.2f}'.format(precision*100), end='')
+            print(' | ', end='')
+            print('LR: {:5.2f}\n'.format(recall*100), end='')
         for key, value in six.iteritems(self.history[field]):
           if hasattr(value, 'append'):
             value.append(0)
@@ -528,6 +587,7 @@ class GraphOutputs(object):
       print('Toks: {:6d}'.format(n_tokens), end='')
       print(' | ', end='')
       print('Seqs: {:5d}\n'.format(n_sequences), end='')
+      print('Non-Local Rate | {:.2f}% ({}/{})'.format(n_nonlocal_tokens/float(n_tokens)*100,int(n_nonlocal_tokens), n_tokens))
     filename = os.path.join(self.save_dir, '{}.pkl'.format(self.dataset))
     with open(filename, 'wb') as f:
       pkl.dump(self.history, f, protocol=pkl.HIGHEST_PROTOCOL)
@@ -555,9 +615,14 @@ class GraphOutputs(object):
   @property
   def decoder(self):
     return self._config.getstr(self, 'decoder')
+  @property
+  def drop_arc(self):
+    return self._config.getfloat(self, 'drop_arc')
 
 #***************************************************************
 class TrainOutputs(GraphOutputs):
   _dataset = 'train'
 class DevOutputs(GraphOutputs):
   _dataset = 'dev'
+class AuxOutputs(GraphOutputs):
+  _dataset = 'aux'

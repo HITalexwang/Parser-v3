@@ -33,7 +33,7 @@ from tensorflow.python.client import timeline
 from debug.timer import Timer
 
 from parser.neural import nn, nonlin, embeddings, recurrent, classifiers
-from parser.graph_outputs import GraphOutputs, TrainOutputs, DevOutputs
+from parser.graph_outputs import GraphOutputs, TrainOutputs, DevOutputs, AuxOutputs
 from parser.structs import conllu_dataset
 from parser.structs import vocabs
 from parser.neural.optimizers import AdamOptimizer, AMSGradOptimizer
@@ -47,11 +47,10 @@ class BaseNetwork(object):
   #=============================================================
   def __init__(self, input_networks=set(), config=None):
     """"""
-
+    
     with Timer('Initializing the network (including pretrained vocab)'):
       self._config = config
-      #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
+      #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
       self._input_networks = input_networks
       input_network_classes = set(input_network.classname for input_network in self._input_networks)
       assert input_network_classes == set(self.input_network_classes), 'Not all input networks were passed in to {}'.format(self.classname)
@@ -70,6 +69,7 @@ class BaseNetwork(object):
         self._id_vocab = vocabs.IDIndexVocab(config=config)
         extant_vocabs['IDIndexVocab'] = self._id_vocab
 
+      aux_conllus = self.aux_conllus or None
       self._input_vocabs = []
       for input_vocab_classname in self.input_vocab_classes:
         if input_vocab_classname in extant_vocabs:
@@ -77,7 +77,7 @@ class BaseNetwork(object):
         else:
           VocabClass = getattr(vocabs, input_vocab_classname)
           vocab = VocabClass(config=config)
-          vocab.load() or vocab.count(self.train_conllus)
+          vocab.load() or vocab.count(self.train_conllus, aux_conllus=aux_conllus)
           self._input_vocabs.append(vocab)
           extant_vocabs[input_vocab_classname] = vocab
 
@@ -88,7 +88,10 @@ class BaseNetwork(object):
         else:
           VocabClass = getattr(vocabs, output_vocab_classname)
           vocab = VocabClass(config=config)
-          vocab.load() or vocab.count(self.train_conllus)
+          if 'Semrel' in output_vocab_classname and not self.aux_label:
+            vocab.load() or vocab.count(self.train_conllus, aux_conllus=None)
+          else:
+            vocab.load() or vocab.count(self.train_conllus, aux_conllus=aux_conllus)
           self._output_vocabs.append(vocab)
           extant_vocabs[output_vocab_classname] = vocab
 
@@ -99,7 +102,7 @@ class BaseNetwork(object):
         else:
           VocabClass = getattr(vocabs, throughput_vocab_classname)
           vocab = VocabClass(config=config)
-          vocab.load() or vocab.count(self.train_conllus)
+          vocab.load() or vocab.count(self.train_conllus, aux_conllus=aux_conllus)
           self._throughput_vocabs.append(vocab)
           extant_vocabs[throughput_vocab_classname] = vocab
 
@@ -109,6 +112,50 @@ class BaseNetwork(object):
     return
 
   #=============================================================
+  def get_mix_rate_upbounds(self):
+    mix_rates = [float(rate) for rate in self.mix_rates]
+    sum_rate = sum(mix_rates)
+    mix_rates = [rate/sum_rate for rate in mix_rates]
+    self._mix_rate_upbounds = [mix_rates[0]]
+    for i in range(1, len(mix_rates)):
+      self._mix_rate_upbounds.append(self._mix_rate_upbounds[i-1]+mix_rates[i])
+    return
+
+  #=============================================================
+  def next_batch(self, iters, sets):
+    """"""
+
+    update = False
+    # no aux set
+    if len(iters) == 1:
+      batch = next(iters[0], None)
+      if batch is None:
+        print ("### Reload trainset batches ###")
+        update = True
+        sets[0].load_next()
+        iters[0] = sets[0].batch_iterator(shuffle=True)
+        batch = next(iters[0], None)
+      feed_dict = sets[0].set_placeholders(batch)
+      return feed_dict, 0, update
+    # choose a set where the next batch come from
+    else:
+      assert len(self.mix_rate_upbounds) == len(iters)
+      rand = np.random.rand()
+      for i in range(len(self.mix_rate_upbounds)):
+        if rand <= self.mix_rate_upbounds[i]: break
+      #print (self.mix_rate_upbounds, rand, i)
+      batch = next(iters[i], None)
+      if batch is None:
+        print ("### Reload set-{} batches ###".format(i))
+        iters[i] = sets[i].batch_iterator(shuffle=True)
+        batch = next(iters[i], None)
+        if i == 0:
+          update = True
+          sets[0].load_next()
+      feed_dict = sets[i].set_placeholders(batch)
+      return feed_dict, i, update
+
+  #=============================================================
   def train(self, load=False, noscreen=False):
     """"""
 
@@ -116,8 +163,13 @@ class BaseNetwork(object):
                                              config=self._config)
     devset = conllu_dataset.CoNLLUDevset(self.vocabs,
                                          config=self._config)
-    testset = conllu_dataset.CoNLLUTestset(self.vocabs,
-                                           config=self._config)
+
+    #testset = conllu_dataset.CoNLLUTestset(self.vocabs, config=self._config)
+    use_aux = True if self.aux_conllus else False
+    auxsets = []
+    if use_aux:
+      auxsets = [conllu_dataset.CoNLLUAuxset([aux_conllu], self.vocabs, config=self._config) for aux_conllu in self.aux_conllus]
+    print ("### Using {} Auxiliary Set(s) ###".format(len(auxsets)))
 
     factored_deptree = None
     factored_semgraph = None
@@ -139,9 +191,28 @@ class BaseNetwork(object):
       input_network_savers.append(saver)
       input_network_paths.append(self._config(self, input_network.classname+'_dir'))
     with tf.variable_scope(self.classname, reuse=False):
-      train_graph = self.build_graph(input_network_outputs=input_network_outputs, reuse=False)
+      #with tf.device('/gpu:0'):
+      train_graph = self.build_graph(input_network_outputs=input_network_outputs, reuse=False, n_aux=len(auxsets))
+      aux_outputs = None
+      if use_aux:
+        aux_graphs = []
+        aux_outputs = []
+        for i in range(len(auxsets)):
+          aux_graphs.append([{'auxgraph':train_graph[0].pop('auxgraph-%d'%i)}])
+          aux_graphs[-1].append(train_graph[1])
+          aux_outputs.append(AuxOutputs(*aux_graphs[i], load=load, evals=self._evals, factored_deptree=False, 
+                                          factored_semgraph=False, config=self._config, dataset='aux-%d'%i))
+      """
+      if use_aux and 'auxhead' in train_graph[0]:
+        aux_graph = [{'auxhead':train_graph[0].pop('auxhead')}]
+        aux_graph.append(train_graph[1])
+        aux_outputs = AuxOutputs(*aux_graph, load=load, evals=self._evals, factored_deptree=False, factored_semgraph=False, config=self._config)
+      elif 'auxhead' in  train_graph[0]:
+        train_graph[0].pop('auxhead')
+      """
       train_outputs = TrainOutputs(*train_graph, load=load, evals=self._evals, factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
     with tf.variable_scope(self.classname, reuse=True):
+      #with tf.device('/gpu:0'):
       dev_graph = self.build_graph(input_network_outputs=input_network_outputs, reuse=True)
       dev_outputs = DevOutputs(*dev_graph, load=load, evals=self._evals, factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
     regularization_loss = self.l2_reg * tf.losses.get_regularization_loss() if self.l2_reg else 0
@@ -153,6 +224,14 @@ class BaseNetwork(object):
     amsgrad = AMSGradOptimizer.from_optimizer(adam)
     amsgrad_op = amsgrad.minimize(train_outputs.loss + regularization_loss, variables=tf.trainable_variables(scope=self.classname)) # returns the current step
     amsgrad_train_tensors = [amsgrad_op, train_outputs.accuracies]
+    if use_aux and aux_outputs is not None:
+      aux_adam_train_tensors = []
+      aux_amsgrad_train_tensors = []
+      for i in range(len(aux_outputs)):
+        aux_adam_op = adam.minimize(aux_outputs[i].loss, variables=tf.trainable_variables(scope=self.classname))
+        aux_adam_train_tensors.append([aux_adam_op, aux_outputs[i].accuracies])
+        aux_amsgrad_op = amsgrad.minimize(aux_outputs[i].loss, variables=tf.trainable_variables(scope=self.classname))
+        aux_amsgrad_train_tensors.append([aux_amsgrad_op, aux_outputs[i].accuracies])
     dev_tensors = dev_outputs.accuracies
     # I think this needs to come after the optimizers
     if self.save_model_after_improvement or self.save_model_after_training:
@@ -162,7 +241,17 @@ class BaseNetwork(object):
       saver = tf.train.Saver(list(save_variables), max_to_keep=1)
 
     screen_output = []
+    gpus = self.cuda_visible_devices.strip().split(',') if self.cuda_visible_devices else []
     config = tf.ConfigProto()
+    if self.cpu_num > 0:
+      config.device_count['CPU'] = self.cpu_num
+    # These 2 should be used to control threads while using only CPU
+    if self.intra_threads > 0:
+      print ("Intra threads:",self.intra_threads)
+      config.intra_op_parallelism_threads=self.intra_threads
+    if self.inter_threads > 0:
+      print ("Inter threads:",self.inter_threads)
+      config.inter_op_parallelism_threads=self.inter_threads
     config.gpu_options.allow_growth = True
     config.allow_soft_placement = True
     with tf.Session(config=config) as sess:
@@ -175,126 +264,22 @@ class BaseNetwork(object):
       run_metadata = tf.RunMetadata()
       #---
       if not noscreen:
-        #---------------------------------------------------------
-        def run(stdscr):
-          current_optimizer = 'Adam'
-          train_tensors = adam_train_tensors
-          current_step = 0
-          curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLACK)
-          curses.init_pair(2, curses.COLOR_RED, curses.COLOR_BLACK)
-          curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLACK)
-          curses.init_pair(4, curses.COLOR_GREEN, curses.COLOR_BLACK)
-          curses.init_pair(5, curses.COLOR_CYAN, curses.COLOR_BLACK)
-          curses.init_pair(6, curses.COLOR_BLUE, curses.COLOR_BLACK)
-          curses.init_pair(7, curses.COLOR_MAGENTA, curses.COLOR_BLACK)
-          stdscr.clrtoeol()
-          stdscr.addstr('\t')
-          stdscr.addstr('{}\n'.format(self.save_dir), curses.A_STANDOUT)
-          stdscr.clrtoeol()
-          stdscr.addstr('\t')
-          stdscr.addstr('GPU: {}\n'.format(self.cuda_visible_devices), curses.color_pair(1) | curses.A_BOLD)
-          stdscr.clrtoeol()
-          stdscr.addstr('\t')
-          stdscr.addstr('Current optimizer: {}\n'.format(current_optimizer), curses.color_pair(1) | curses.A_BOLD)
-          stdscr.clrtoeol()
-          stdscr.addstr('\t')
-          stdscr.addstr('Epoch: {:3d}'.format(0), curses.color_pair(1) | curses.A_BOLD)
-          stdscr.addstr(' | ')
-          stdscr.addstr('Step: {:5d}\n'.format(0), curses.color_pair(1) | curses.A_BOLD)
-          stdscr.clrtoeol()
-          stdscr.addstr('\t')
-          stdscr.addstr('Moving acc: {:5.2f}'.format(0.), curses.color_pair(1) | curses.A_BOLD)
-          stdscr.addstr(' | ')
-          stdscr.addstr('Best moving acc: {:5.2f}\n'.format(0.), curses.color_pair(1) | curses.A_BOLD)
-          stdscr.clrtoeol()
-          stdscr.addstr('\t')
-          stdscr.addstr('Steps since improvement: {:4d}\n'.format(0),  curses.color_pair(1) | curses.A_BOLD)
-          stdscr.clrtoeol()
-          stdscr.move(2,0)
-          stdscr.refresh()
-          try:
-            current_epoch = 0
-            best_accuracy = 0
-            current_accuracy = 0
-            steps_since_best = 0
-            while (not self.max_steps or current_step < self.max_steps) and \
-                  (not self.max_steps_without_improvement or steps_since_best < self.max_steps_without_improvement) and \
-                  (not self.n_passes or current_epoch < len(trainset.conllu_files)*self.n_passes):
-              if steps_since_best >= 1 and self.switch_optimizers:
-                train_tensors = amsgrad_train_tensors
-                current_optimizer = 'AMSGrad'
-              for batch in trainset.batch_iterator(shuffle=True):
-                train_outputs.restart_timer()
-                start_time = time.time()
-                feed_dict = trainset.set_placeholders(batch)
-                _, train_scores = sess.run(train_tensors, feed_dict=feed_dict)
-                train_outputs.update_history(train_scores)
-                current_step += 1
-                if current_step % self.print_every == 0:
-                  for batch in devset.batch_iterator(shuffle=False):
-                    dev_outputs.restart_timer()
-                    feed_dict = devset.set_placeholders(batch)
-                    dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
-                    dev_outputs.update_history(dev_scores)
-                  current_accuracy *= .5
-                  current_accuracy += .5*dev_outputs.get_current_accuracy()
-                  if current_accuracy >= best_accuracy:
-                    steps_since_best = 0
-                    best_accuracy = current_accuracy
-                    if self.save_model_after_improvement:
-                      saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
-                    if self.parse_devset:
-                      self.parse_files(devset, dev_outputs, sess, print_time=False)
-                  else:
-                    steps_since_best += self.print_every
-                  current_epoch = sess.run(self.global_step)
-                  stdscr.addstr('\t')
-                  stdscr.addstr('Current optimizer: {}\n'.format(current_optimizer), curses.color_pair(1) | curses.A_BOLD)
-                  stdscr.clrtoeol()
-                  stdscr.addstr('\t')
-                  stdscr.addstr('Epoch: {:3d}'.format(int(current_epoch)), curses.color_pair(1) | curses.A_BOLD)
-                  stdscr.addstr(' | ')
-                  stdscr.addstr('Step: {:5d}\n'.format(int(current_step)), curses.color_pair(1) | curses.A_BOLD)
-                  stdscr.clrtoeol()
-                  stdscr.addstr('\t')
-                  stdscr.addstr('Moving acc: {:5.2f}'.format(current_accuracy), curses.color_pair(1) | curses.A_BOLD)
-                  stdscr.addstr(' | ')
-                  stdscr.addstr('Best moving acc: {:5.2f}\n'.format(best_accuracy), curses.color_pair(1) | curses.A_BOLD)
-                  stdscr.clrtoeol()
-                  stdscr.addstr('\t')
-                  stdscr.addstr('Steps since improvement: {:4d}\n'.format(int(steps_since_best)),  curses.color_pair(1) | curses.A_BOLD)
-                  stdscr.clrtoeol()
-                  train_outputs.print_recent_history(stdscr)
-                  dev_outputs.print_recent_history(stdscr)
-                  print('')
-                  stdscr.move(2,0)
-                  stdscr.refresh()
-              current_epoch = sess.run(self.global_step)
-              sess.run(update_step)
-              trainset.load_next()
-            with open(os.path.join(self.save_dir, 'SUCCESS'), 'w') as f:
-              pass
-          except KeyboardInterrupt:
-            pass
-
-          line = 0
-          stdscr.move(line,0)
-          instr = stdscr.instr().rstrip()
-          while instr:
-            screen_output.append(instr)
-            line += 1
-            stdscr.move(line,0)
-            instr = stdscr.instr().rstrip()
-        #---------------------------------------------------------
-        curses.wrapper(run)
-
-        with open(os.path.join(self.save_dir, 'scores.txt'), 'wb') as f:
-          #f.write(b'\n'.join(screen_output).decode('utf-8'))
-          f.write(b'\n'.join(screen_output))
-        print(b'\n'.join(screen_output).decode('utf-8'))
+        print ("NO Screen Version is removed for simplicity!")
+        exit(1)
       else:
         current_optimizer = 'Adam'
-        train_tensors = adam_train_tensors
+        iters = [trainset.batch_iterator(shuffle=True)]
+        sets = [trainset]
+        outputs = [train_outputs]
+        tensors = [adam_train_tensors]
+        trains = [0]
+        if use_aux:
+          trains += [0] * len(auxsets)
+          self.get_mix_rate_upbounds()
+          iters += [auxset.batch_iterator(shuffle=True) for auxset in auxsets]
+          sets += auxsets
+          outputs += aux_outputs
+          tensors += aux_adam_train_tensors
         current_step = 0
         print('\t', end='')
         print('{}\n'.format(self.save_dir), end='')
@@ -309,59 +294,108 @@ class BaseNetwork(object):
                 (not self.max_steps_without_improvement or steps_since_best < self.max_steps_without_improvement) and \
                 (not self.n_passes or current_epoch < len(trainset.conllu_files)*self.n_passes):
             if steps_since_best >= 1 and self.switch_optimizers and current_optimizer != 'AMSGrad':
-              train_tensors = amsgrad_train_tensors
+              tensors[0] = amsgrad_train_tensors
+              if use_aux:
+                for i in range(1, len(tensors)):
+                  tensors[i] = aux_amsgrad_train_tensors[i-1]
               current_optimizer = 'AMSGrad'
               print('\t', end='')
               print('Current optimizer: {}\n'.format(current_optimizer), end='')
-            for batch in trainset.batch_iterator(shuffle=True):
-              train_outputs.restart_timer()
-              start_time = time.time()
-              feed_dict = trainset.set_placeholders(batch)
-              #---
-              if current_step < 10:
-                _, train_scores = sess.run(train_tensors, feed_dict=feed_dict, options=options, run_metadata=run_metadata)
+
+            feed_dict, task_id, update = self.next_batch(iters, sets)
+            trains[task_id] += 1
+            if update:
+              sess.run(update_step)
+            outputs[task_id].restart_timer()
+            start_time = time.time()
+
+            with tf.device('/gpu:0'):
+              if current_step < 1:
+                _, scores = sess.run(tensors[task_id], feed_dict=feed_dict, options=options, run_metadata=run_metadata)
                 fetched_timeline = timeline.Timeline(run_metadata.step_stats)
                 chrome_trace = fetched_timeline.generate_chrome_trace_format()
                 with open(os.path.join(self.save_dir, 'profile', 'timeline_step_%d.json' % current_step), 'w') as f:
                   f.write(chrome_trace)
               else:
-                _, train_scores = sess.run(train_tensors, feed_dict=feed_dict)
+                _, scores = sess.run(tensors[task_id], feed_dict=feed_dict)
+              outputs[task_id].update_history(scores)
+
+            """
+            # old version
+            for batch in trainset.batch_iterator(shuffle=True):
+              #print ("### Train on one batch of trainset ###")
+
+              train_outputs.restart_timer()
+              start_time = time.time()
+              feed_dict = trainset.set_placeholders(batch)
               #---
-              train_outputs.update_history(train_scores)
-              current_step += 1
-              if current_step % self.print_every == 0:
-                for batch in devset.batch_iterator(shuffle=False):
-                  dev_outputs.restart_timer()
-                  feed_dict = devset.set_placeholders(batch)
-                  dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
-                  dev_outputs.update_history(dev_scores)
-                current_accuracy *= .5
-                current_accuracy += .5*dev_outputs.get_current_accuracy()
-                if current_accuracy >= best_accuracy:
-                  steps_since_best = 0
-                  best_accuracy = current_accuracy
-                  if self.save_model_after_improvement:
-                    saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
-                  if self.parse_devset:
-                    self.parse_files(devset, dev_outputs, sess, print_time=False)
+              with tf.device('/gpu:0'):
+                if current_step < 10:
+                  _, train_scores = sess.run(train_tensors, feed_dict=feed_dict, options=options, run_metadata=run_metadata)
+                  fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+                  chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                  with open(os.path.join(self.save_dir, 'profile', 'timeline_step_%d.json' % current_step), 'w') as f:
+                    f.write(chrome_trace)
                 else:
-                  steps_since_best += self.print_every
-                current_epoch = sess.run(self.global_step)
-                print('\t', end='')
-                print('Epoch: {:3d}'.format(int(current_epoch)), end='')
-                print(' | ', end='')
-                print('Step: {:5d}\n'.format(int(current_step)), end='')
-                print('\t', end='')
-                print('Moving acc: {:5.2f}'.format(current_accuracy), end='')
-                print(' | ', end='')
-                print('Best moving acc: {:5.2f}\n'.format(best_accuracy), end='')
-                print('\t', end='')
-                print('Steps since improvement: {:4d}\n'.format(int(steps_since_best)), end='')
-                train_outputs.print_recent_history()
-                dev_outputs.print_recent_history()
+                  _, train_scores = sess.run(train_tensors, feed_dict=feed_dict)
+                #---
+                train_outputs.update_history(train_scores)
+
+                # run a auxiliary set batch
+                if use_aux:
+                  aux_batch = next(aux_iter, None)
+                  if aux_batch is None:
+                    #print ("### Reload auxset batches ###")
+                    aux_iter = auxset.batch_iterator(shuffle=True)
+                    aux_batch = next(aux_iter, None)
+                  #print ("### Train on one batch of auxset ###")
+                  aux_outputs.restart_timer()
+                  feed_dict = auxset.set_placeholders(aux_batch)
+                  _, aux_scores = sess.run(aux_tensors, feed_dict=feed_dict)
+                  aux_outputs.update_history(aux_scores)
+              """
+
+            current_step += 1
+            if current_step % self.print_every == 0:
+              for batch in devset.batch_iterator(shuffle=False):
+                dev_outputs.restart_timer()
+                feed_dict = devset.set_placeholders(batch)
+                dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
+                dev_outputs.update_history(dev_scores)
+              current_accuracy *= .5
+              current_accuracy += .5*dev_outputs.get_current_accuracy()
+              if current_accuracy >= best_accuracy:
+                steps_since_best = 0
+                best_accuracy = current_accuracy
+                if self.save_model_after_improvement:
+                  saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
+                if self.parse_devset:
+                  self.parse_files(devset, dev_outputs, sess, print_time=False)
+              else:
+                steps_since_best += self.print_every
+              current_epoch = sess.run(self.global_step)
+              print('\t', end='')
+              print('Epoch: {:3d}'.format(int(current_epoch)), end='')
+              print(' | ', end='')
+              print('Step: {:5d}\n'.format(int(current_step)), end='')
+              print('\t', end='')
+              print('Moving acc: {:5.2f}'.format(current_accuracy), end='')
+              print(' | ', end='')
+              print('Best moving acc: {:5.2f}\n'.format(best_accuracy), end='')
+              print('\t', end='')
+              print('Steps since improvement: {:4d}\n'.format(int(steps_since_best)), end='')
+              train_outputs.print_recent_history()
+              if use_aux:
+                for i in range(len(aux_outputs)):
+                  aux_outputs[i].print_recent_history()
+              dev_outputs.print_recent_history()
+              print ("Batch splits: {}".format(":".join([str(b) for b in trains])))
+              for i in range(len(trains)):
+                trains[i] = 0
+            
             current_epoch = sess.run(self.global_step)
-            sess.run(update_step)
-            trainset.load_next()
+            #sess.run(update_step)
+            #trainset.load_next()
           with open(os.path.join(self.save_dir, 'SUCCESS'), 'w') as f:
             pass
         except KeyboardInterrupt:
@@ -390,6 +424,8 @@ class BaseNetwork(object):
     with Timer('Building TF'):
       with tf.variable_scope(self.classname, reuse=False):
         parse_graph = self.build_graph(reuse=True)
+        if 'auxhead' in parse_graph[0]:
+          parse_graph[0].pop('auxhead')
         parse_outputs = DevOutputs(*parse_graph, load=False, factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
       parse_tensors = parse_outputs.accuracies
       all_variables = set(tf.global_variables())
@@ -408,7 +444,10 @@ class BaseNetwork(object):
         saver.restore(sess, tf.train.latest_checkpoint(self.save_dir))
       if len(conllu_files) == 1 or output_filename is not None:
         with Timer('Parsing file'):
-          self.parse_file(parseset, parse_outputs, sess, output_dir=output_dir, output_filename=output_filename)
+          if not self.other_save_dirs:
+            self.parse_file(parseset, parse_outputs, sess, output_dir=output_dir, output_filename=output_filename)
+          else:
+            self.parse_file_ensemble(parseset, parse_outputs, sess, saver, output_dir=output_dir, output_filename=output_filename)
       else:
         with Timer('Parsing files'):
           self.parse_files(parseset, parse_outputs, sess, output_dir=output_dir)
@@ -419,16 +458,76 @@ class BaseNetwork(object):
     """"""
 
     probability_tensors = graph_outputs.probabilities
+    score_tensors = graph_outputs.accuracies
+    input_filename = dataset.conllu_files[0]
+    #graph_outputs.restart_timer()
+    start_time = time.time()
+    for i, indices in enumerate(dataset.batch_iterator(shuffle=False)):
+      with Timer('Parsing batch %d' % i):
+        graph_outputs.restart_timer()
+        tokens, lengths = dataset.get_tokens(indices)
+        feed_dict = dataset.set_placeholders(indices)
+        scores, probabilities = sess.run([score_tensors, probability_tensors], feed_dict=feed_dict)
+        predictions = graph_outputs.probs_to_preds(probabilities, lengths)
+        tokens.update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
+        graph_outputs.cache_predictions(tokens, indices)
+        graph_outputs.update_history(scores)
+    graph_outputs.print_recent_history()
+
+    with Timer('Dumping predictions'):
+      if output_dir is None and output_filename is None:
+        graph_outputs.print_current_predictions()
+      else:
+        input_dir, input_filename = os.path.split(input_filename)
+        if output_dir is None:
+          output_dir = os.path.join(self.save_dir, 'parsed', input_dir)
+        elif output_filename is None:
+          output_filename = input_filename
+        
+        if not os.path.exists(output_dir):
+          os.makedirs(output_dir)
+        output_filename = os.path.join(output_dir, output_filename)
+        with codecs.open(output_filename, 'w', encoding='utf-8') as f:
+          graph_outputs.dump_current_predictions(f)
+    if print_time:
+      #print('\033[92mParsing 1 file took {:0.1f} seconds\033[0m'.format(time.time() - graph_outputs.time))
+      print('\033[92mParsing 1 file took {:0.1f} seconds\033[0m'.format(time.time() - start_time))
+    return
+
+  #=============================================================
+  def parse_file_ensemble(self, dataset, graph_outputs, sess, saver, output_dir=None, output_filename=None, print_time=True):
+    """"""
+
+    probability_tensors = graph_outputs.probabilities
     input_filename = dataset.conllu_files[0]
     graph_outputs.restart_timer()
+    collects = []
     for i, indices in enumerate(dataset.batch_iterator(shuffle=False)):
       with Timer('Parsing batch %d' % i):
         tokens, lengths = dataset.get_tokens(indices)
         feed_dict = dataset.set_placeholders(indices)
         probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
-        predictions = graph_outputs.probs_to_preds(probabilities, lengths)
-        tokens.update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
-        graph_outputs.cache_predictions(tokens, indices)
+        collect = {'indices':indices, 'tokens':tokens, 'lengths':lengths, 'probs':probabilities}
+        collects.append(collect)
+
+    for n, save_dir in enumerate(self.other_save_dirs):
+      print ("### Loading model {} for predicting ###".format(n+1))
+      saver.restore(sess, tf.train.latest_checkpoint(save_dir))
+      for i, collect in enumerate(collects):
+        with Timer('Parsing batch %d' % i):
+          feed_dict = dataset.set_placeholders(collect['indices'])
+          probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
+          for field in probabilities:
+            collect['probs'][field] += probabilities[field]
+
+    for i, collect in enumerate(collects):
+      for field in collect['probs']:
+        collect['probs'][field] /= len(self.other_save_dirs)+1
+      with Timer('Merging batch %d' % i):
+        predictions = graph_outputs.probs_to_preds(collect['probs'], collect['lengths'])
+        collect['tokens'].update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
+        graph_outputs.cache_predictions(collect['tokens'], collect['indices'])
+
 
     with Timer('Dumping predictions'):
       if output_dir is None and output_filename is None:
@@ -504,11 +603,17 @@ class BaseNetwork(object):
   def train_conllus(self):
     return self._config.getfiles(self, 'train_conllus')
   @property
+  def aux_conllus(self):
+    return self._config.getfiles(self, 'aux_conllus')
+  @property
   def cuda_visible_devices(self):
     return os.getenv('CUDA_VISIBLE_DEVICES')
   @property
   def save_dir(self):
     return self._config.getstr(self, 'save_dir')
+  @property
+  def other_save_dirs(self):
+    return self._config.getlist(self, 'other_save_dirs')
   @property
   def vocabs(self):
     return self._vocabs
@@ -646,3 +751,21 @@ class BaseNetwork(object):
   @property
   def share_layer(self):
     return self._config.getboolean(self, 'share_layer')
+  @property
+  def cpu_num(self):
+    return self._config.getint(self, 'cpu_num')
+  @property
+  def intra_threads(self):
+    return self._config.getint(self, 'intra_threads')
+  @property
+  def inter_threads(self):
+    return self._config.getint(self, 'inter_threads')
+  @property
+  def mix_rates(self):
+    return self._config.getlist(self, 'mix_rates')
+  @property
+  def mix_rate_upbounds(self):
+    return self._mix_rate_upbounds
+  @property
+  def aux_label(self):
+    return self._config.getboolean(self, 'aux_label')

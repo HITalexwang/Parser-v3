@@ -99,6 +99,9 @@ def main():
   run_parser.add_argument('conllu_files', nargs='+')
   run_parser.add_argument('--output_dir')
   run_parser.add_argument('--output_filename')
+  run_parser.add_argument('--other_save_dirs')
+  run_parser.add_argument('--elmo_test_filename')
+  run_parser.add_argument('--drop_arc')
   for section_name in section_names:
     run_parser.add_argument('--'+section_name, nargs='+')
     
@@ -244,10 +247,13 @@ def run(**kwargs):
 
   # Get the special arguments
   save_dir = kwargs.pop('save_dir')
+  other_save_dirs = kwargs.pop('other_save_dirs')
   save_metadir = kwargs.pop('save_metadir')
   conllu_files = kwargs.pop('conllu_files')
   output_dir = kwargs.pop('output_dir')
   output_filename = kwargs.pop('output_filename')
+  elmo_test_filename = kwargs.pop('elmo_test_filename')
+  drop_arc = kwargs.pop('drop_arc')
 
   # Get the cl-defined options
   kwargs = {key: value for key, value in six.iteritems(kwargs) if value is not None}
@@ -265,6 +271,19 @@ def run(**kwargs):
     save_dir = Config(**kwargs).get('DEFAULT', 'save_dir')
   config_file = os.path.join(save_dir, 'config.cfg')
   kwargs['DEFAULT']['save_dir'] = save_dir
+  kwargs['DEFAULT']['other_save_dirs'] = other_save_dirs
+  kwargs['DEFAULT']['conllu_files'] = ':'.join(conllu_files)
+  if drop_arc is None:
+    drop_arc = -1
+  else:
+    if not 0 < float(drop_arc) < 1:
+      print ("### Keeping arc rate should in (0,1), use default 0.5 ###")
+      drop_arc = -1
+  print ("### Keeping arcs with prob >= {:.2f} ###".format(float(drop_arc) if float(drop_arc) > 0 else .5))
+  kwargs['DEFAULT']['drop_arc'] = drop_arc
+  if elmo_test_filename:
+    kwargs['FormElmoVocab'] = {}
+    kwargs['FormElmoVocab']['elmo_test_filename'] = elmo_test_filename
 
   config = Config(defaults_file='', config_file=config_file, **kwargs)
   network_class = config.get('DEFAULT', 'network_class')

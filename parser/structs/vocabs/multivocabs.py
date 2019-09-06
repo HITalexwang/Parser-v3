@@ -26,6 +26,7 @@ from .base_vocabs import BaseVocab
 from . import conllu_vocabs as cv
 from . import token_vocabs as tv
 from . import pretrained_vocabs as pv
+from . import elmo_vocabs as ev
 from . import subtoken_vocabs as sv
 
 from parser.neural import embeddings
@@ -37,6 +38,7 @@ class Multivocab(BaseVocab, list):
   _token_vocab_class = None
   _subtoken_vocab_class = None
   _pretrained_vocab_class = None
+  _elmo_vocab_class = None
   
   #=============================================================
   def __init__(self, config=None):
@@ -73,6 +75,14 @@ class Multivocab(BaseVocab, list):
       self.extend(pretrained_vocabs)
     else:
       pretrained_vocabs = []
+
+    # Set up the elmo vocab(s)
+    use_elmo_vocab = config.getboolean(self, 'use_elmo_vocab')
+    if use_elmo_vocab:
+      elmo_vocabs = [self._elmo_vocab_class(config=config)]
+      self.extend(elmo_vocabs)
+    else:
+      elmo_vocabs = []
       
     # Set the special tokens
     for base_special_token in self[0].base_special_tokens:
@@ -82,6 +92,7 @@ class Multivocab(BaseVocab, list):
     self._token_vocab = token_vocab
     self._subtoken_vocab = subtoken_vocab
     self._pretrained_vocabs = pretrained_vocabs
+    self._elmo_vocabs = elmo_vocabs
     return
   
   #=============================================================
@@ -94,16 +105,16 @@ class Multivocab(BaseVocab, list):
     return status
   
   #=============================================================
-  def count(self, train_conllus):
+  def count(self, train_conllus, aux_conllus=None):
     """"""
     
     status = True
     for vocab in self:
-      status = (vocab._loaded or vocab.count(train_conllus) if hasattr(vocab, 'count') else True) and status
+      status = (vocab._loaded or vocab.count(train_conllus, aux_conllus) if hasattr(vocab, 'count') else True) and status
     return status
   
   #=============================================================
-  def get_input_tensor(self, reuse=True):
+  def get_input_tensor(self, reuse=True, aux_char=False):
     """"""
     
     embed_keep_prob = 1 if reuse else self.embed_keep_prob
@@ -111,30 +122,57 @@ class Multivocab(BaseVocab, list):
     #  assert len(set([vocab.embed_size for vocab in self])) == 1, "Unless Multivocab.combine_func is set to 'concat', all vocabs must have the same 'embed_size'"
     
     nonzero_init = True
-    with tf.variable_scope(self.field):
+    with tf.variable_scope(self.field) as scope:
       input_tensors = []
       if self._pretrained_vocabs:
         with tf.variable_scope('Pretrained') as variable_scope:
           input_tensors.extend([pretrained_vocab.get_input_tensor(embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse) for pretrained_vocab in self._pretrained_vocabs])
           nonzero_init = False
+
+      if self._elmo_vocabs:
+        with tf.variable_scope('Elmo') as variable_scope:
+          input_tensors.extend([elmo_vocab.get_input_tensor(embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse) for elmo_vocab in self._elmo_vocabs])
+          nonzero_init = False
       
       if self._subtoken_vocab is not None:
         with tf.variable_scope('Subtoken') as variable_scope:
-          input_tensors.append(self._subtoken_vocab.get_input_tensor(nonzero_init=nonzero_init, embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse))
+          if not aux_char:
+            input_tensors.append(self._subtoken_vocab.get_input_tensor(nonzero_init=nonzero_init, embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse))
+          else:
+            subtoken_layer, subtoken_aux_layer = self._subtoken_vocab.get_input_tensor(nonzero_init=nonzero_init, embed_keep_prob=1., 
+                                                  variable_scope=variable_scope, reuse=reuse, aux_char=aux_char)
+            aux_tensors = input_tensors + [subtoken_aux_layer]
+            input_tensors.append(subtoken_layer) 
           nonzero_init = False
       
       if self._token_vocab is not None:
         with tf.variable_scope('Token') as variable_scope:
-          input_tensors.append(self._token_vocab.get_input_tensor(nonzero_init=nonzero_init, embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse))
-      
+          token_layer = self._token_vocab.get_input_tensor(nonzero_init=nonzero_init, embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse)
+          input_tensors.append(token_layer)
+        if aux_char:
+          aux_tensors.append(token_layer)
+
       layer = self.combine_func(input_tensors, embed_keep_prob=embed_keep_prob, drop_func=self.drop_func)
+      if aux_char:
+        #print (input_tensors)
+        #print (aux_tensors)
+        scope.reuse_variables()
+        aux_layer = self.combine_func(aux_tensors, embed_keep_prob=embed_keep_prob, drop_func=self.drop_func)
+        return layer, aux_layer
     return layer
   
   #=============================================================
-  def add(self, token):
+  def add(self, token, pos=None):
     """"""
-    
-    return tuple(vocab.add(token) for vocab in self)
+
+    sums = []
+    for vocab in self:
+      if 'Elmo' in vocab.__class__.__name__:
+        sums.append(vocab.add(pos))
+      else:
+        sums.append(vocab.add(token))
+    return tuple(sums)
+    #return tuple(vocab.add(token) for vocab in self)
   
   #=============================================================
   def index(self, token):
@@ -200,6 +238,7 @@ class FormMultivocab(Multivocab, cv.FormVocab):
   _token_vocab_class = tv.FormTokenVocab
   _subtoken_vocab_class = sv.FormSubtokenVocab
   _pretrained_vocab_class = pv.FormPretrainedVocab
+  _elmo_vocab_class = ev.FormElmoVocab
 class LemmaMultivocab(Multivocab, cv.LemmaVocab):
   _token_vocab_class = tv.LemmaTokenVocab
   _subtoken_vocab_class = sv.LemmaSubtokenVocab
