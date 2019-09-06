@@ -116,8 +116,7 @@ class BaseNetwork(object):
                                              config=self._config)
     devset = conllu_dataset.CoNLLUDevset(self.vocabs,
                                          config=self._config)
-    testset = conllu_dataset.CoNLLUTestset(self.vocabs,
-                                           config=self._config)
+    #testset = conllu_dataset.CoNLLUTestset(self.vocabs, config=self._config)
 
     factored_deptree = None
     factored_semgraph = None
@@ -408,7 +407,10 @@ class BaseNetwork(object):
         saver.restore(sess, tf.train.latest_checkpoint(self.save_dir))
       if len(conllu_files) == 1 or output_filename is not None:
         with Timer('Parsing file'):
-          self.parse_file(parseset, parse_outputs, sess, output_dir=output_dir, output_filename=output_filename)
+          if self.other_save_dirs is None:
+            self.parse_file(parseset, parse_outputs, sess, output_dir=output_dir, output_filename=output_filename)
+          else:
+            self.parse_file_ensemble(parseset, parse_outputs, sess, saver, output_dir=output_dir, output_filename=output_filename)
       else:
         with Timer('Parsing files'):
           self.parse_files(parseset, parse_outputs, sess, output_dir=output_dir)
@@ -429,6 +431,60 @@ class BaseNetwork(object):
         predictions = graph_outputs.probs_to_preds(probabilities, lengths)
         tokens.update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
         graph_outputs.cache_predictions(tokens, indices)
+
+    with Timer('Dumping predictions'):
+      if output_dir is None and output_filename is None:
+        graph_outputs.print_current_predictions()
+      else:
+        input_dir, input_filename = os.path.split(input_filename)
+        if output_dir is None:
+          output_dir = os.path.join(self.save_dir, 'parsed', input_dir)
+        elif output_filename is None:
+          output_filename = input_filename
+        
+        if not os.path.exists(output_dir):
+          os.makedirs(output_dir)
+        output_filename = os.path.join(output_dir, output_filename)
+        with codecs.open(output_filename, 'w', encoding='utf-8') as f:
+          graph_outputs.dump_current_predictions(f)
+    if print_time:
+      print('\033[92mParsing 1 file took {:0.1f} seconds\033[0m'.format(time.time() - graph_outputs.time))
+    return
+
+  #=============================================================
+  def parse_file_ensemble(self, dataset, graph_outputs, sess, saver, output_dir=None, output_filename=None, print_time=True):
+    """"""
+
+    probability_tensors = graph_outputs.probabilities
+    input_filename = dataset.conllu_files[0]
+    graph_outputs.restart_timer()
+    collects = []
+    for i, indices in enumerate(dataset.batch_iterator(shuffle=False)):
+      with Timer('Parsing batch %d' % i):
+        tokens, lengths = dataset.get_tokens(indices)
+        feed_dict = dataset.set_placeholders(indices)
+        probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
+        collect = {'indices':indices, 'tokens':tokens, 'lengths':lengths, 'probs':probabilities}
+        collects.append(collect)
+
+    for n, save_dir in enumerate(self.other_save_dirs):
+      print ("### Loading model {} for predicting ###".format(n+1))
+      saver.restore(sess, tf.train.latest_checkpoint(save_dir))
+      for i, collect in enumerate(collects):
+        with Timer('Parsing batch %d' % i):
+          feed_dict = dataset.set_placeholders(collect['indices'])
+          probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
+          for field in probabilities:
+            collect['probs'][field] += probabilities[field]
+
+    for i, collect in enumerate(collects):
+      for field in collect['probs']:
+        collect['probs'][field] /= len(self.other_save_dirs)+1
+      with Timer('Parsing batch %d' % i):
+        predictions = graph_outputs.probs_to_preds(collect['probs'], collect['lengths'])
+        collect['tokens'].update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
+        graph_outputs.cache_predictions(collect['tokens'], collect['indices'])
+
 
     with Timer('Dumping predictions'):
       if output_dir is None and output_filename is None:
@@ -509,6 +565,9 @@ class BaseNetwork(object):
   @property
   def save_dir(self):
     return self._config.getstr(self, 'save_dir')
+  @property
+  def other_save_dirs(self):
+    return self._config.getlist(self, 'other_save_dirs')
   @property
   def vocabs(self):
     return self._vocabs

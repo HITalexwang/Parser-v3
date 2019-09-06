@@ -101,34 +101,35 @@ class GraphParserNetwork(BaseNetwork):
   
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
-    with tf.variable_scope('Classifiers'):
-      if 'semrel' in output_fields:
-        vocab = output_fields['semrel']
-        if vocab.factorized:
-          head_vocab = output_fields['semhead']
-          with tf.variable_scope('Unlabeled'):
-            unlabeled_outputs = head_vocab.get_bilinear_discriminator(
-              layer,
+    with tf.device('/gpu:1'):
+      with tf.variable_scope('Classifiers'):
+        if 'semrel' in output_fields:
+          vocab = output_fields['semrel']
+          if vocab.factorized:
+            head_vocab = output_fields['semhead']
+            with tf.variable_scope('Unlabeled'):
+              unlabeled_outputs = head_vocab.get_bilinear_discriminator(
+                layer,
+                token_weights=token_weights3D,
+                reuse=reuse)
+            with tf.variable_scope('Labeled'):
+              labeled_outputs = vocab.get_bilinear_classifier(
+                layer, unlabeled_outputs,
+                token_weights=token_weights3D,
+                reuse=reuse)
+          else:
+            labeled_outputs = vocab.get_unfactored_bilinear_classifier(layer, head_vocab.placeholder,
               token_weights=token_weights3D,
               reuse=reuse)
-          with tf.variable_scope('Labeled'):
-            labeled_outputs = vocab.get_bilinear_classifier(
-              layer, unlabeled_outputs,
-              token_weights=token_weights3D,
-              reuse=reuse)
-        else:
-          labeled_outputs = vocab.get_unfactored_bilinear_classifier(layer, head_vocab.placeholder,
+          outputs['semgraph'] = labeled_outputs
+          self._evals.add('semgraph')
+        elif 'semhead' in output_fields:
+          vocab = output_fields['semhead']
+          outputs[vocab.classname] = vocab.get_bilinear_classifier(
+            layer,
             token_weights=token_weights3D,
             reuse=reuse)
-        outputs['semgraph'] = labeled_outputs
-        self._evals.add('semgraph')
-      elif 'semhead' in output_fields:
-        vocab = output_fields['semhead']
-        outputs[vocab.classname] = vocab.get_bilinear_classifier(
-          layer,
-          token_weights=token_weights3D,
-          reuse=reuse)
-        self._evals.add('semhead')
+          self._evals.add('semhead')
     
     return outputs, tokens
   

@@ -84,6 +84,7 @@ class PretrainedVocab(SetVocab):
                                                      self.placeholder,
                                                      name=self.name,
                                                      reuse=reuse)
+
       if embed_keep_prob < 1:
         layer = self.drop_func(layer, embed_keep_prob)
     return layer

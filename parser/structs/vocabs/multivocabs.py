@@ -26,6 +26,7 @@ from .base_vocabs import BaseVocab
 from . import conllu_vocabs as cv
 from . import token_vocabs as tv
 from . import pretrained_vocabs as pv
+from . import elmo_vocabs as ev
 from . import subtoken_vocabs as sv
 
 from parser.neural import embeddings
@@ -37,6 +38,7 @@ class Multivocab(BaseVocab, list):
   _token_vocab_class = None
   _subtoken_vocab_class = None
   _pretrained_vocab_class = None
+  _elmo_vocab_class = None
   
   #=============================================================
   def __init__(self, config=None):
@@ -73,6 +75,14 @@ class Multivocab(BaseVocab, list):
       self.extend(pretrained_vocabs)
     else:
       pretrained_vocabs = []
+
+    # Set up the elmo vocab(s)
+    use_elmo_vocab = config.getboolean(self, 'use_elmo_vocab')
+    if use_elmo_vocab:
+      elmo_vocabs = [self._elmo_vocab_class(config=config)]
+      self.extend(elmo_vocabs)
+    else:
+      elmo_vocabs = []
       
     # Set the special tokens
     for base_special_token in self[0].base_special_tokens:
@@ -82,6 +92,7 @@ class Multivocab(BaseVocab, list):
     self._token_vocab = token_vocab
     self._subtoken_vocab = subtoken_vocab
     self._pretrained_vocabs = pretrained_vocabs
+    self._elmo_vocabs = elmo_vocabs
     return
   
   #=============================================================
@@ -117,6 +128,11 @@ class Multivocab(BaseVocab, list):
         with tf.variable_scope('Pretrained') as variable_scope:
           input_tensors.extend([pretrained_vocab.get_input_tensor(embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse) for pretrained_vocab in self._pretrained_vocabs])
           nonzero_init = False
+
+      if self._elmo_vocabs:
+        with tf.variable_scope('Elmo') as variable_scope:
+          input_tensors.extend([elmo_vocab.get_input_tensor(embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse) for elmo_vocab in self._elmo_vocabs])
+          nonzero_init = False
       
       if self._subtoken_vocab is not None:
         with tf.variable_scope('Subtoken') as variable_scope:
@@ -131,10 +147,17 @@ class Multivocab(BaseVocab, list):
     return layer
   
   #=============================================================
-  def add(self, token):
+  def add(self, token, pos=None):
     """"""
-    
-    return tuple(vocab.add(token) for vocab in self)
+
+    sums = []
+    for vocab in self:
+      if 'Elmo' in vocab.__class__.__name__:
+        sums.append(vocab.add(pos))
+      else:
+        sums.append(vocab.add(token))
+    return tuple(sums)
+    #return tuple(vocab.add(token) for vocab in self)
   
   #=============================================================
   def index(self, token):
@@ -200,6 +223,7 @@ class FormMultivocab(Multivocab, cv.FormVocab):
   _token_vocab_class = tv.FormTokenVocab
   _subtoken_vocab_class = sv.FormSubtokenVocab
   _pretrained_vocab_class = pv.FormPretrainedVocab
+  _elmo_vocab_class = ev.FormElmoVocab
 class LemmaMultivocab(Multivocab, cv.LemmaVocab):
   _token_vocab_class = tv.LemmaTokenVocab
   _subtoken_vocab_class = sv.LemmaSubtokenVocab

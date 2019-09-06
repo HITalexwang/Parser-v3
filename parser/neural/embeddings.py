@@ -107,10 +107,12 @@ def token_embedding_lookup(n_entries, embed_size, ids, nonzero_init=False, reuse
   return layers
 
 #===============================================================
-def pretrained_embedding_lookup(params, linear_size, ids, name='', reuse=True):
+def pretrained_embedding_lookup(params, linear_size, ids, name='', reuse=True, input_embed_keep_prob=1.):
   """"""
 
   layer = tf.nn.embedding_lookup(params, ids)
+  if input_embed_keep_prob < 1.:
+    layer = dropout(layer, input_embed_keep_prob)
   batch_size, bucket_size, input_size = nn.get_sizes(layer)
   shape = [input_size, linear_size]
   weights = tf.get_variable(name+'Transformation', shape=shape)#, initializer=tf.orthogonal_initializer)
