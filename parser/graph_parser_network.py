@@ -41,6 +41,8 @@ class GraphParserNetwork(BaseNetwork):
     """"""
     
     with tf.variable_scope('Embeddings'):
+
+      #pos-tag embedding + word embedding
       if self.sum_pos: # TODO this should be done with a `POSMultivocab`
         pos_vocabs = list(filter(lambda x: 'POS' in x.classname, self.input_vocabs))
         pos_tensors = [input_vocab.get_input_tensor(embed_keep_prob=1, reuse=reuse) for input_vocab in pos_vocabs]
@@ -54,8 +56,12 @@ class GraphParserNetwork(BaseNetwork):
           else:
             pos_tensors = [pos_tensors]
         input_tensors = non_pos_tensors + pos_tensors
+
+      #word embedding
       else:
         input_tensors = [input_vocab.get_input_tensor(reuse=reuse) for input_vocab in self.input_vocabs]
+
+
       for input_network, output in input_network_outputs:
         with tf.variable_scope(input_network.classname):
           input_tensors.append(input_network.get_input_tensor(output, reuse=reuse))

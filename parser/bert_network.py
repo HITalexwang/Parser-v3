@@ -28,12 +28,17 @@ import codecs
 
 import numpy as np
 import tensorflow as tf
+import tensorflow_hub as hub
 
 from parser.base_network import BaseNetwork
 from parser.neural import nn, nonlin, embeddings, recurrent, classifiers
 
+import bert
+from bert import run_classifier
+from bert import optimization
+from bert import tokenization
 #***************************************************************
-class ElmoNetwork(BaseNetwork):
+class BERTNetwork(BaseNetwork):
   """"""
   
   _evals = set()

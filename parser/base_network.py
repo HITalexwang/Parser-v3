@@ -134,33 +134,45 @@ class BaseNetwork(object):
         factored_deptree = vocab.factorized
       elif vocab.field == 'semrel':
         factored_semgraph = vocab.factorized
+
     input_network_outputs = {}
     input_network_savers = []
     input_network_paths = []
+
     for input_network in self.input_networks:
       with tf.variable_scope(input_network.classname, reuse=False):
         input_network_outputs[input_network.classname] = input_network.build_graph(reuse=True)[0]
+
       network_variables = set(tf.global_variables(scope=input_network.classname))
       non_save_variables = set(tf.get_collection('non_save_variables'))
       network_save_variables = network_variables - non_save_variables
       saver = tf.train.Saver(list(network_save_variables))
       input_network_savers.append(saver)
       input_network_paths.append(self._config(self, input_network.classname+'_dir'))
+
     with tf.variable_scope(self.classname, reuse=False):
       train_graph = self.build_graph(input_network_outputs=input_network_outputs, reuse=False)
-      train_outputs = TrainOutputs(*train_graph, load=load, evals=self._evals, factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+      train_outputs = TrainOutputs(*train_graph, load=load, evals=self._evals, \
+                                   factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+
     with tf.variable_scope(self.classname, reuse=True):
       dev_graph = self.build_graph(input_network_outputs=input_network_outputs, reuse=True)
-      dev_outputs = DevOutputs(*dev_graph, load=load, evals=self._evals, factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+      dev_outputs = DevOutputs(*dev_graph, load=load, evals=self._evals, \
+                               factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+
     regularization_loss = self.l2_reg * tf.losses.get_regularization_loss() if self.l2_reg else 0
 
     update_step = tf.assign_add(self.global_step, 1)
     adam = AdamOptimizer(config=self._config)
-    adam_op = adam.minimize(train_outputs.loss + regularization_loss, variables=tf.trainable_variables(scope=self.classname)) # returns the current step
+    adam_op = adam.minimize(train_outputs.loss + regularization_loss, \
+                            variables=tf.trainable_variables(scope=self.classname)) # returns the current step
     adam_train_tensors = [adam_op, train_outputs.accuracies]
+
     amsgrad = AMSGradOptimizer.from_optimizer(adam)
-    amsgrad_op = amsgrad.minimize(train_outputs.loss + regularization_loss, variables=tf.trainable_variables(scope=self.classname)) # returns the current step
+    amsgrad_op = amsgrad.minimize(train_outputs.loss + regularization_loss, \
+                                  variables=tf.trainable_variables(scope=self.classname)) # returns the current step
     amsgrad_train_tensors = [amsgrad_op, train_outputs.accuracies]
+
     dev_tensors = dev_outputs.accuracies
     # I think this needs to come after the optimizers
     if self.save_model_after_improvement or self.save_model_after_training:
@@ -176,6 +188,7 @@ class BaseNetwork(object):
     with tf.Session(config=config) as sess:
       for saver, path in zip(input_network_savers, input_network_paths):
         saver.restore(sess, path)
+
       feed_dict = {}
       if self.use_elmo:
         feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
