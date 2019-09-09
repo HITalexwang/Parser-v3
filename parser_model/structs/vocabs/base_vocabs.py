@@ -29,7 +29,7 @@ from collections import defaultdict as DefaultDict
 import numpy as np
 import tensorflow as tf
 
-import parser.neural.nn
+import parser_model.neural.nn
 # id_vocab.root = 0
 # form_vocab.root = <ROOT>
 # lemma_vocab.root = <ROOT>

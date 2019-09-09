@@ -38,7 +38,7 @@ from collections import Counter
 import numpy as np
 import tensorflow as tf
 
-from parser.structs.buckets import DictMultibucket
+from parser_model.structs.buckets import DictMultibucket
  
 #***************************************************************
 class CoNLLUDataset(set):

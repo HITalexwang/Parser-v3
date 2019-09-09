@@ -25,7 +25,7 @@ import tensorflow as tf
 from tensorflow import identity, tanh, asinh
 from tensorflow.python.ops.nn import relu, elu
 
-from parser.neural import nn
+from parser_model.neural import nn
 
 #===============================================================
 # Base functions:

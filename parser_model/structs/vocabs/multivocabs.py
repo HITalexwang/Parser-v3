@@ -29,7 +29,7 @@ from . import pretrained_vocabs as pv
 from . import elmo_vocabs as ev
 from . import subtoken_vocabs as sv
 
-from parser.neural import embeddings
+from parser_model.neural import embeddings
 
 #***************************************************************
 class Multivocab(BaseVocab, list): 

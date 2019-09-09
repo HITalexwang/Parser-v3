@@ -13,3 +13,5 @@ saves/
 *.log
 output/
 tmp/
+
+.idea

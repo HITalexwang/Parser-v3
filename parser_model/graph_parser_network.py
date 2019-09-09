@@ -29,11 +29,11 @@ import codecs
 import numpy as np
 import tensorflow as tf
 
-from parser.base_network import BaseNetwork
-from parser.neural import nn, nonlin, embeddings, recurrent, classifiers
+from parser_model.base_network import BaseNetwork
+from parser_model.neural import nn, nonlin, embeddings, recurrent, classifiers
 
 #***************************************************************
-class ParserNetwork(BaseNetwork):
+class GraphParserNetwork(BaseNetwork):
   """"""
   
   #=============================================================
@@ -41,6 +41,8 @@ class ParserNetwork(BaseNetwork):
     """"""
     
     with tf.variable_scope('Embeddings'):
+
+      #pos-tag embedding + word embedding
       if self.sum_pos: # TODO this should be done with a `POSMultivocab`
         pos_vocabs = list(filter(lambda x: 'POS' in x.classname, self.input_vocabs))
         pos_tensors = [input_vocab.get_input_tensor(embed_keep_prob=1, reuse=reuse) for input_vocab in pos_vocabs]
@@ -54,8 +56,12 @@ class ParserNetwork(BaseNetwork):
           else:
             pos_tensors = [pos_tensors]
         input_tensors = non_pos_tensors + pos_tensors
+
+      #word embedding
       else:
         input_tensors = [input_vocab.get_input_tensor(reuse=reuse) for input_vocab in self.input_vocabs]
+
+
       for input_network, output in input_network_outputs:
         with tf.variable_scope(input_network.classname):
           input_tensors.append(input_network.get_input_tensor(output, reuse=reuse))
@@ -70,9 +76,13 @@ class ParserNetwork(BaseNetwork):
     n_tokens = tf.reduce_sum(tokens_per_sequence)
     n_sequences = tf.count_nonzero(tokens_per_sequence)
     seq_lengths = tokens_per_sequence+1
+
+    root_weights = token_weights + (1-nn.greater(tf.range(bucket_size), 0))
+    token_weights3D = tf.expand_dims(token_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
     tokens = {'n_tokens': n_tokens,
               'tokens_per_sequence': tokens_per_sequence,
               'token_weights': token_weights,
+              'token_weights3D': token_weights,
               'n_sequences': n_sequences}
     
     conv_keep_prob = 1. if reuse else self.conv_keep_prob
@@ -98,40 +108,33 @@ class ParserNetwork(BaseNetwork):
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
     with tf.variable_scope('Classifiers'):
-      if 'deprel' in output_fields:
-        vocab = output_fields['deprel']
+      if 'semrel' in output_fields:
+        vocab = output_fields['semrel']
         if vocab.factorized:
-          head_vocab = output_fields['dephead']
+          head_vocab = output_fields['semhead']
           with tf.variable_scope('Unlabeled'):
-            unlabeled_outputs = head_vocab.get_bilinear_classifier(
+            unlabeled_outputs = head_vocab.get_bilinear_discriminator(
               layer,
-              token_weights=token_weights,
+              token_weights=token_weights3D,
               reuse=reuse)
           with tf.variable_scope('Labeled'):
             labeled_outputs = vocab.get_bilinear_classifier(
               layer, unlabeled_outputs,
-              token_weights=token_weights,
+              token_weights=token_weights3D,
               reuse=reuse)
         else:
           labeled_outputs = vocab.get_unfactored_bilinear_classifier(layer, head_vocab.placeholder,
-            token_weights=token_weights,
+            token_weights=token_weights3D,
             reuse=reuse)
-        outputs['deptree'] = labeled_outputs
-        self._evals.add('deptree')
-        if 'ufeats' in output_fields:
-          vocab = output_fields['ufeats']
-          outputs[vocab.field] = vocab.get_bilinear_classifier(
-            layer, labeled_outputs,
-            token_weights=token_weights,
-            reuse=reuse)
-          self._evals.add('ufeats')
-      elif 'dephead' in output_fields:
-        vocab = output_fields['dephead']
+        outputs['semgraph'] = labeled_outputs
+        self._evals.add('semgraph')
+      elif 'semhead' in output_fields:
+        vocab = output_fields['semhead']
         outputs[vocab.classname] = vocab.get_bilinear_classifier(
           layer,
-          token_weights=token_weights,
+          token_weights=token_weights3D,
           reuse=reuse)
-        self._evals.add('dephead')
+        self._evals.add('semhead')
     
     return outputs, tokens
   

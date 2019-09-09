@@ -29,10 +29,10 @@ from collections import defaultdict as DefaultDict
 import numpy as np
 import tensorflow as tf
 
-from parser.structs.vocabs.base_vocabs import BaseVocab
+from parser_model.structs.vocabs.base_vocabs import BaseVocab
 from . import conllu_vocabs as cv
 
-from parser.neural import nn, nonlin, embeddings, classifiers
+from parser_model.neural import nn, nonlin, embeddings, classifiers
 
 #***************************************************************
 class FeatureVocab(BaseVocab):

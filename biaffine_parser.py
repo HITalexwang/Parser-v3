@@ -15,8 +15,8 @@ from six.moves import input
 import codecs
 from argparse import ArgumentParser
 
-from parser.config import Config
-import parser 
+from parser_model.config import Config
+import parser_model
 
 class Biaffine_Parser(object):
   def __init__(self, save_dir, other_save_dirs=None):

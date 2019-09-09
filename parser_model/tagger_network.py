@@ -31,8 +31,8 @@ import tensorflow as tf
 
 from debug.timer import Timer
 
-from parser.base_network import BaseNetwork
-from parser.neural import nn, nonlin, embeddings, recurrent, classifiers
+from parser_model.base_network import BaseNetwork
+from parser_model.neural import nn, nonlin, embeddings, recurrent, classifiers
 
 #***************************************************************
 class TaggerNetwork(BaseNetwork):

@@ -28,11 +28,11 @@ from collections import Counter
 import numpy as np
 import tensorflow as tf
 
-from parser.structs.buckets import ListMultibucket
+from parser_model.structs.buckets import ListMultibucket
 from .base_vocabs import CountVocab
 from . import conllu_vocabs as cv
 
-from parser.neural import nn, nonlin, embeddings, recurrent, classifiers
+from parser_model.neural import nn, nonlin, embeddings, recurrent, classifiers
 
 #***************************************************************
 class SubtokenVocab(CountVocab):

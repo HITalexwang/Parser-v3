@@ -29,8 +29,8 @@ from six.moves import input
 import codecs
 from argparse import ArgumentParser
 
-from parser.config import Config
-import parser 
+from parser_model.config import Config
+import parser_model
 #from hpo import MVGHPO
 #from hpo.evals.syndep_eval import evaluate_tokens
 #from hpo.evals.conll18_eval import evaluate
@@ -55,7 +55,7 @@ def resolve_network_dependencies(config, network_class, network_list, networks):
         _config = Config(config_file=config_file)
         _network_list = _config.get(_network_class, 'input_network_classes')
         input_networks, networks = resolve_network_dependencies(_config, _network_class, _network_list, networks)
-        NetworkClass = getattr(parser, _network_class)
+        NetworkClass = getattr(parser_model, _network_class)
         networks[_network_class] = NetworkClass(input_networks=input_networks, config=config)
     return set(networks[_network_class] for _network_class in network_list), networks
 #-------------------------------------------------------------
@@ -154,7 +154,7 @@ def train(**kwargs):
     with open(os.path.join(save_dir, 'config.cfg'), 'w') as f:
       config.write(f)
   input_networks, networks = resolve_network_dependencies(config, network_class, network_list, {})
-  NetworkClass = getattr(parser, network_class)
+  NetworkClass = getattr(parser_model, network_class)
   network = NetworkClass(input_networks=input_networks, config=config)
   network.train(load=load, noscreen=noscreen)
   return
@@ -198,7 +198,7 @@ def run(**kwargs):
   network_class = config.get('DEFAULT', 'network_class')
   network_list = config.get(network_class, 'input_network_classes')
   input_networks, networks = resolve_network_dependencies(config, network_class, network_list, {})
-  NetworkClass = getattr(parser, network_class)
+  NetworkClass = getattr(parser_model, network_class)
   network = NetworkClass(input_networks=input_networks, config=config)
   network.parse(conllu_files, output_dir=output_dir, output_filename=output_filename)
   return

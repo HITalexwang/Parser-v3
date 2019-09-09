@@ -27,10 +27,10 @@ from collections import Counter
 import numpy as np
 import tensorflow as tf
 
-from parser.structs.vocabs.base_vocabs import CountVocab
+from parser_model.structs.vocabs.base_vocabs import CountVocab
 from . import conllu_vocabs as cv
 
-from parser.neural import nn, nonlin, embeddings, classifiers
+from parser_model.neural import nn, nonlin, embeddings, classifiers
 
 #***************************************************************
 class TokenVocab(CountVocab):
