@@ -29,8 +29,8 @@ import codecs
 import numpy as np
 import tensorflow as tf
 
-from parser.base_network import BaseNetwork
-from parser.neural import nn, nonlin, embeddings, recurrent, classifiers
+from parser_model.base_network import BaseNetwork
+from parser_model.neural import nn, nonlin, embeddings, recurrent, classifiers
 
 #***************************************************************
 class ParserNetwork(BaseNetwork):

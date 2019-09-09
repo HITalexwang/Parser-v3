@@ -21,7 +21,7 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-from parser.neural.optimizers.optimizer import Optimizer
+from parser_model.neural.optimizers.optimizer import Optimizer
 
 #***************************************************************
 class AdamOptimizer(Optimizer):

@@ -32,11 +32,11 @@ from tensorflow.python.client import timeline
 
 from debug.timer import Timer
 
-from parser.neural import nn, nonlin, embeddings, recurrent, classifiers
-from parser.graph_outputs import GraphOutputs, TrainOutputs, DevOutputs
-from parser.structs import conllu_dataset
-from parser.structs import vocabs
-from parser.neural.optimizers import AdamOptimizer, AMSGradOptimizer
+from parser_model.neural import nn, nonlin, embeddings, recurrent, classifiers
+from parser_model.graph_outputs import GraphOutputs, TrainOutputs, DevOutputs
+from parser_model.structs import conllu_dataset
+from parser_model.structs import vocabs
+from parser_model.neural.optimizers import AdamOptimizer, AMSGradOptimizer
 
 #***************************************************************
 class BaseNetwork(object):

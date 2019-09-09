@@ -32,7 +32,7 @@ import time
 import numpy as np
 import tensorflow as tf
 
-from parser.neural import nn
+from parser_model.neural import nn
 from scripts.chuliu_edmonds import chuliu_edmonds_one_root
 from scripts.mst import nonprojective
 
