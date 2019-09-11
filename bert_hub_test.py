@@ -7,8 +7,8 @@ import tensorflow as tf
 import tensorflow_hub as hub
 
 # This is a path to an uncased (all lowercase) version of BERT
-# BERT_MODEL_HUB = "/Users/longxud/Documents/Code/bert/cased_L-12_H-768_A-12"
-BERT_MODEL_HUB = "bert/hub_bert_cased_L-12_H-768_A-12"
+BERT_MODEL_HUB = "/Users/longxud/Documents/Code/bert/hub_bert_cased_L-12_H-768_A-12"
+# BERT_MODEL_HUB = "bert/hub_bert_cased_L-12_H-768_A-12"
 # BERT_MODEL_HUB = "https://tfhub.dev/google/bert_uncased_L-12_H-768_A-12/1"
 
 
