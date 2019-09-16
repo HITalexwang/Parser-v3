@@ -93,70 +93,26 @@ class BERTVocab(CountVocab):
       for i, placeholder in enumerate(self._multibucket.get_placeholders()):
         if i:
           scope.reuse_variables()
-        #with tf.device('/gpu:0'):
-        #with tf.device('/gpu:{}'.format(i)):
+
+          # -----------------------------------------------------------------------------
+          import sys
+          cdl = []
+          if i == 0:
+            p0 = tf.compat.v1.print('\n================\n')
+            cdl.append(p0)
+          p1 = tf.compat.v1.print(i, self.placeholder, '\n', summarize=-1)
+          cdl.append(p1)
+          with tf.control_dependencies(cdl):
+            placeholder += tf.constant(0)
+          # -----------------------------------------------------------------------------
+
         with tf.variable_scope('Embeddings'):
           layer = embeddings.token_embedding_lookup(len(self), self.embed_size,
                                                      placeholder,
                                                      nonzero_init=True,
                                                      reuse=reuse)
-
-        seq_lengths = tf.count_nonzero(placeholder, axis=1, dtype=tf.int32)
-        for j in six.moves.range(self.n_layers):
-          conv_width = self.first_layer_conv_width if not j else self.conv_width
-          with tf.variable_scope('RNN-{}'.format(j)):
-            layer, final_states = recurrent.directed_RNN(
-              layer, self.recur_size, seq_lengths,
-              bidirectional=self.bidirectional,
-              recur_cell=self.recur_cell,
-              conv_width=conv_width,
-              recur_func=self.recur_func,
-              conv_keep_prob=conv_keep_prob,
-              recur_keep_prob=recur_keep_prob,
-              cifg=self.cifg,
-              highway=self.highway,
-              highway_func=self.highway_func,
-              bilin=self.bilin)
-
-
-        if not self.squeeze_type.startswith('gated'):
-          if self.squeeze_type == 'linear_attention':
-            with tf.variable_scope('Attention'):
-              _, layer = classifiers.linear_attention(layer, hidden_keep_prob=output_keep_prob)
-          elif self.squeeze_type == 'final_hidden':
-            layer, _ = tf.split(final_states, 2, axis=-1)
-          elif self.squeeze_type == 'final_cell':
-            _, layer = tf.split(final_states, 2, axis=-1)
-          elif self.squeeze_type == 'final_state':
-            layer = final_states
-          elif self.squeeze_type == 'reduce_max':
-            layer = tf.reduce_max(layer, axis=-2)
-          with tf.variable_scope('Linear'):
-            layer = classifiers.hidden(layer, self.output_size,
-                                       hidden_func=self.output_func,
-                                       hidden_keep_prob=output_keep_prob)
-        else:
-          with tf.variable_scope('Attention'):
-            attn, layer = classifiers.deep_linear_attention(layer, self.output_size,
-                                       hidden_func=nonlin.identity,
-                                       hidden_keep_prob=output_keep_prob)
-          if self.squeeze_type == 'gated_reduce_max':
-            layer = tf.nn.relu(tf.reduce_max(layer, axis=-2)) + .1*tf.reduce_sum(layer, axis=-2)/(tf.count_nonzero(layer, axis=-2, dtype=tf.float32)+1e-12)
-          elif self.squeeze_type == 'gated_reduce_sum':
-            layer = self.output_func(tf.reduce_sum(layer, axis=-2))
-        #layer = tf.tf.Print(layer, [tf.shape(layer)])
-        layers.append(layer)
-      # Concatenate all the buckets' embeddings
-      layer = tf.concat(layers, 0)
-      # Put them in the right order, creating the embedding matrix
-      layer = tf.nn.embedding_lookup(layer, self._multibucket.placeholder)
-      #layer = tf.nn.embedding_lookup(layers, self._multibucket.placeholder, partition_strategy='div')
-      #layer = tf.Print(layer, [tf.shape(layer)])
-      # Get the embeddings from the embedding matrix
-      layer = tf.nn.embedding_lookup(layer, self.placeholder)
-
-      if embed_keep_prob < 1:
-        layer = self.drop_func(layer, embed_keep_prob)
+      # if embed_keep_prob < 1:
+      #   layer = self.drop_func(layer, embed_keep_prob)
     return layer
 
   #=============================================================
@@ -385,13 +341,13 @@ class BERTVocab(CountVocab):
 #       self.counts.update(rel)
 #
 # #***************************************************************
-# class FormBERTVocab(BERTVocab, cv.FormVocab):
-#   pass
-# class LemmaBERTVocab(BERTVocab, cv.LemmaVocab):
-#   pass
-# class UPOSBERTVocab(BERTVocab, cv.UPOSVocab):
-#   pass
-# class XPOSBERTVocab(BERTVocab, cv.XPOSVocab):
-#   pass
-# class DeprelBERTVocab(BERTVocab, cv.DeprelVocab):
-#   pass
+class FormBERTVocab(BERTVocab, cv.FormVocab):
+  pass
+class LemmaBERTVocab(BERTVocab, cv.LemmaVocab):
+  pass
+class UPOSBERTVocab(BERTVocab, cv.UPOSVocab):
+  pass
+class XPOSBERTVocab(BERTVocab, cv.XPOSVocab):
+  pass
+class DeprelBERTVocab(BERTVocab, cv.DeprelVocab):
+  pass

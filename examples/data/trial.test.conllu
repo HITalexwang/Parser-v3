@@ -7,3 +7,11 @@
 2	惊醒	惊醒	VV	VV	_	0	Root	0:Root	_
 3	了	了	AS	AS	_	2	3_mDepd	2:3_mDepd	_
 4	。	。	PU	PU	_	2	3_mPunc	2:3_mPunc	_
+
+1	明天	明天	NT	NT	_	4	3_Time	4:3_Time	_
+2	我	我	PN	PN	_	4	3_Agt	4:3_Agt|5:3_Agt	_
+3	将	将	AD	AD	_	4	3_mDepd	4:3_mDepd	_
+4	去	去	VV	VV	_	0	Root	0:Root	_
+5	看	看	VV	VV	_	4	3_eEfft	4:3_eEfft	_
+6	他	他	PN	PN	_	5	3_Datv	5:3_Datv	_
+7	。	。	PU	PU	_	5	3_mPunc	5:3_mPunc	_

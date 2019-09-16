@@ -28,6 +28,7 @@ from . import token_vocabs as tv
 from . import pretrained_vocabs as pv
 from . import elmo_vocabs as ev
 from . import subtoken_vocabs as sv
+from . import bert_vocabs as bv
 
 from parser_model.neural import embeddings
 
@@ -37,6 +38,7 @@ class Multivocab(BaseVocab, list):
   
   _token_vocab_class = None
   _subtoken_vocab_class = None
+  _bert_vocab_class = None
   _pretrained_vocab_class = None
   _elmo_vocab_class = None
   
@@ -62,7 +64,15 @@ class Multivocab(BaseVocab, list):
       self.append(subtoken_vocab)
     else:
       subtoken_vocab = None
-    
+
+    # Set up the BERT vocab
+    use_bert_vocab = config.getboolean(self, 'use_bert_vocab')
+    if use_bert_vocab:
+      bert_vocab = self._bert_vocab_class(config=config)
+      self.append(bert_vocab)
+    else:
+      bert_vocab = None
+
     # Set up the pretrained vocab(s)
     use_pretrained_vocab = config.getboolean(self, 'use_pretrained_vocab')
     self._use_pretrained_vocab = use_pretrained_vocab
@@ -93,6 +103,7 @@ class Multivocab(BaseVocab, list):
     
     self._token_vocab = token_vocab
     self._subtoken_vocab = subtoken_vocab
+    self._bert_vocab = bert_vocab
     self._pretrained_vocabs = pretrained_vocabs
     self._elmo_vocabs = elmo_vocabs
     return
@@ -140,11 +151,16 @@ class Multivocab(BaseVocab, list):
         with tf.variable_scope('Subtoken') as variable_scope:
           input_tensors.append(self._subtoken_vocab.get_input_tensor(nonzero_init=nonzero_init, embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse))
           nonzero_init = False
-      
+
+      if self._bert_vocab is not None:
+        with tf.variable_scope('BERT') as variable_scope:
+          input_tensors.append(self._bert_vocab.get_input_tensor(nonzero_init=nonzero_init, embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse))
+          nonzero_init = False
+
       if self._token_vocab is not None:
         with tf.variable_scope('Token') as variable_scope:
           input_tensors.append(self._token_vocab.get_input_tensor(nonzero_init=nonzero_init, embed_keep_prob=1., variable_scope=variable_scope, reuse=reuse))
-      
+
       layer = self.combine_func(input_tensors, embed_keep_prob=embed_keep_prob, drop_func=self.drop_func)
     return layer
   
@@ -231,6 +247,7 @@ class Multivocab(BaseVocab, list):
 class FormMultivocab(Multivocab, cv.FormVocab):
   _token_vocab_class = tv.FormTokenVocab
   _subtoken_vocab_class = sv.FormSubtokenVocab
+  _bert_vocab_class = bv.FormBERTVocab
   _pretrained_vocab_class = pv.FormPretrainedVocab
   _elmo_vocab_class = ev.FormElmoVocab
 class LemmaMultivocab(Multivocab, cv.LemmaVocab):
