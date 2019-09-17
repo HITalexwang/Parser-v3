@@ -50,9 +50,11 @@ class BERTVocab(CountVocab):
     """"""
 
     super(BERTVocab, self).__init__(config=config)
-    self._multibucket = ListMultibucket(self, max_buckets=self.max_buckets, config=config)
-    self._tok2idx = {}
-    self._idx2tok = {}
+    # self._multibucket = ListMultibucket(self, max_buckets=self.max_buckets, config=config)
+    # self._tok2idx = {}
+    # self._idx2tok = {}
+    self._wordpiece_placeholder = tf.placeholder(tf.int32, [None, None], self.classname + '_wordpiece')
+    self._first_index_placeholder = tf.placeholder(tf.int32, [None, None], self.classname + '_first_index')
     self._bert_module = hub.Module(self.bert_hub_path, trainable=self.trainable)
     tokenization_info = self._bert_module(signature="tokenization_info", as_dict=True)
     config = tf.ConfigProto()
@@ -90,25 +92,25 @@ class BERTVocab(CountVocab):
     """"""
 
     with tf.variable_scope(variable_scope or self.classname) as scope:
-      for i, placeholder in enumerate(self._multibucket.get_placeholders()):
-        if i:
-          scope.reuse_variables()
+      # for i, placeholder in enumerate(self._multibucket.get_placeholders()):
+      #   if i:
+      #     scope.reuse_variables()
 
-          # -----------------------------------------------------------------------------
-          import sys
-          cdl = []
-          if i == 0:
-            p0 = tf.compat.v1.print('\n================\n')
-            cdl.append(p0)
-          p1 = tf.compat.v1.print(i, self.placeholder, '\n', summarize=-1)
-          cdl.append(p1)
-          with tf.control_dependencies(cdl):
-            placeholder += tf.constant(0)
-          # -----------------------------------------------------------------------------
+        # -----------------------------------------------------------------------------
+        # import sys
+        # cdl = []
+        # # if i == 0:
+        # #   p0 = tf.compat.v1.print('\n================\n')
+        # #   cdl.append(p0)
+        # p1 = tf.compat.v1.print(self.placeholder, '\n', summarize=-1)
+        # cdl.append(p1)
+        # with tf.control_dependencies(cdl):
+        #   self.placeholder += tf.constant(0)
+        # -----------------------------------------------------------------------------
 
         with tf.variable_scope('Embeddings'):
           layer = embeddings.token_embedding_lookup(len(self), self.embed_size,
-                                                     placeholder,
+                                                     self.placeholder,
                                                      nonzero_init=True,
                                                      reuse=reuse)
       # if embed_keep_prob < 1:
@@ -172,24 +174,27 @@ class BERTVocab(CountVocab):
   def add(self, token):
     """"""
 
-    wordpieces = self._full_tokenizer.wordpiece_tokenizer.tokenize(token)
-    wordpiece_indices = self._full_tokenizer.convert_tokens_to_ids(wordpieces)
-    token_index = self._multibucket.add(wordpiece_indices, wordpieces)
-    self._tok2idx[token] = token_index
-    self._idx2tok[token_index] = token
+    # wordpieces = self._full_tokenizer.wordpiece_tokenizer.tokenize(token)
+    # wordpiece_indices = self._full_tokenizer.convert_tokens_to_ids(wordpieces)
+    # token_index = self._multibucket.add(wordpiece_indices, wordpieces)
+    if token in self._str2idx:
+      return self._str2idx[token]
+    token_index = len(self._str2idx)
+    self._str2idx[token] = token_index
+    self._idx2str[token_index] = token
     return token_index
 
   #=============================================================
   def token(self, index):
     """"""
 
-    return self._idx2tok[index]
+    return self._idx2str[index]
 
   #=============================================================
   def index(self, token):
     """"""
 
-    return self._tok2idx[token]
+    return self._str2idx[token]
 
   #=============================================================
   def set_placeholders(self, indices, feed_dict={}):
@@ -198,30 +203,71 @@ class BERTVocab(CountVocab):
     # unique_indices, inverse_indices = np.unique(indices, return_inverse=True)
     # feed_dict[self.placeholder] = inverse_indices.reshape(indices.shape)
     # self._multibucket.set_placeholders(unique_indices, feed_dict=feed_dict)
-    self._multibucket.set_placeholders(indices, feed_dict=feed_dict)
+    # self._multibucket.set_placeholders(indices, feed_dict=feed_dict)
+
+    all_wordpiece_list = []
+    all_first_index_list = []
+    for data in indices:
+      wordpiece_list = ['[CLS]']
+      first_index_list = []
+      for word in data:
+        if word == 0:
+          break
+        first_index_list.append(len(wordpiece_list))
+        wordpiece_list += self._full_tokenizer.wordpiece_tokenizer.tokenize(self.token(word))
+      wordpiece_list += ['[SEP]']
+      wordpiece_list = self._full_tokenizer.convert_tokens_to_ids(wordpiece_list)
+      all_wordpiece_list.append(wordpiece_list)
+      all_first_index_list.append(first_index_list)
+
+    all_wordpiece_max_len = max([len(a) for a in all_wordpiece_list])
+    all_wordpiece = np.stack(
+      [np.pad(a, (0, all_wordpiece_max_len - len(a)), 'constant', constant_values=0) for a in all_wordpiece_list])
+    feed_dict[self._wordpiece_placeholder] = all_wordpiece
+
+    all_first_index_max_len = max([len(a) for a in all_first_index_list])
+    all_first_index = np.stack(
+      [np.pad(a, (0, all_first_index_max_len - len(a)), 'constant', constant_values=0) for a in all_first_index_list])
+    feed_dict[self._first_index_placeholder] = all_first_index
+
+    feed_dict[self.placeholder] = indices
+
     return feed_dict
 
   #=============================================================
   def open(self):
     """"""
 
-    self._multibucket.open()
+    # self._multibucket.open()
     return self
 
   #=============================================================
   def close(self):
     """"""
 
-    self._multibucket.close()
+    # self._multibucket.close()
     return
 
   #=============================================================
   def reset(self):
     """"""
 
-    self._idx2tok = {}
-    self._tok2idx = {}
-    self._multibucket.reset()
+    # Set the special tokens
+    special_tokens = [getattr(base_special_token, self._config.getstr(self, 'special_token_case'))() for
+                      base_special_token in self._base_special_tokens]
+    if self._config.getboolean(self, 'special_token_html'):
+      special_tokens = [u'<%s>' % special_token for special_token in special_tokens]
+
+    # Add special tokens to the object
+    for i, base_special_token in enumerate(self._base_special_tokens):
+      self.__dict__[base_special_token.upper() + '_IDX'] = i
+      self.__dict__[base_special_token.upper() + '_STR'] = special_tokens[i]
+
+    # Initialize the dictionaries
+    self._str2idx = dict(zip(special_tokens, range(len(special_tokens))))
+    self._idx2str = dict(zip(range(len(special_tokens)), special_tokens))
+
+    self._special_tokens = set(special_tokens)
 
   #=============================================================
   @property

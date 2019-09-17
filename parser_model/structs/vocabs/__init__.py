@@ -6,4 +6,4 @@ from parser_model.structs.vocabs.feature_vocabs import LemmaFeatureVocab, XPOSFe
 from parser_model.structs.vocabs.subtoken_vocabs import FormSubtokenVocab, LemmaSubtokenVocab, UPOSSubtokenVocab, XPOSSubtokenVocab, DeprelSubtokenVocab
 from parser_model.structs.vocabs.pretrained_vocabs import FormPretrainedVocab, LemmaPretrainedVocab, UPOSPretrainedVocab, XPOSPretrainedVocab, DeprelPretrainedVocab
 from parser_model.structs.vocabs.multivocabs import FormMultivocab, LemmaMultivocab, UPOSMultivocab, XPOSMultivocab, XPOSMultivocab, DeprelMultivocab
-# from parser_model.structs.vocabs.bert_vocabs import FormBERTVocab, LemmaBERTVocab, UPOSBERTVocab, XPOSBERTVocab, DeprelBERTVocab
+from parser_model.structs.vocabs.bert_vocabs import FormBERTVocab, LemmaBERTVocab, UPOSBERTVocab, XPOSBERTVocab, DeprelBERTVocab
