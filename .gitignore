@@ -5,7 +5,7 @@
 *.old.py
 
 # Data directory
-#data/
+data/
 saves/
 *.tar.gz
 

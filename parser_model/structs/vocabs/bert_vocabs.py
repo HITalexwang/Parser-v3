@@ -50,9 +50,25 @@ class BERTVocab(CountVocab):
     """"""
 
     super(BERTVocab, self).__init__(config=config)
-    # self._multibucket = ListMultibucket(self, max_buckets=self.max_buckets, config=config)
-    # self._tok2idx = {}
-    # self._idx2tok = {}
+
+    # # Set the special tokens
+    # special_tokens = [getattr(base_special_token, self._config.getstr(self, 'special_token_case'))() for
+    #                   base_special_token in self._base_special_tokens]
+    # if self._config.getboolean(self, 'special_token_html'):
+    #   special_tokens = [u'<%s>' % special_token for special_token in special_tokens]
+    #
+    # # Add special tokens to the object
+    # for i, base_special_token in enumerate(self._base_special_tokens):
+    #   self.__dict__[base_special_token.upper() + '_IDX'] = i
+    #   self.__dict__[base_special_token.upper() + '_STR'] = special_tokens[i]
+    #
+    # # Initialize the dictionaries
+    # self._str2idx = dict(zip(special_tokens, range(len(special_tokens))))
+    # self._idx2str = dict(zip(range(len(special_tokens)), special_tokens))
+    #
+    # self._special_tokens = set(special_tokens)
+
+    # Initialize the BERT module
     self._wordpiece_placeholder = tf.placeholder(tf.int32, [None, None], self.classname + '_wordpiece')
     self._first_index_placeholder = tf.placeholder(tf.int32, [None, None], self.classname + '_first_index')
     self._bert_module = hub.Module(self.bert_hub_path, trainable=self.trainable)
@@ -108,11 +124,24 @@ class BERTVocab(CountVocab):
         #   self.placeholder += tf.constant(0)
         # -----------------------------------------------------------------------------
 
-        with tf.variable_scope('Embeddings'):
-          layer = embeddings.token_embedding_lookup(len(self), self.embed_size,
-                                                     self.placeholder,
-                                                     nonzero_init=True,
-                                                     reuse=reuse)
+      # with tf.variable_scope('Embeddings'):
+      #   layer = embeddings.token_embedding_lookup(len(self), self.embed_size,
+      #                                              self.placeholder,
+      #                                              nonzero_init=True,
+      #                                              reuse=reuse)
+
+      bert_inputs = dict(
+        input_ids=self._wordpiece_placeholder,
+        input_mask=tf.cast(self._wordpiece_placeholder > 0, tf.int32),
+        segment_ids=tf.zeros_like(self._wordpiece_placeholder)
+      )
+      bert_outputs = self._bert_module(
+        inputs=bert_inputs,
+        signature="tokens",
+        as_dict=True
+      )
+      layer = bert_outputs['sequence_output']
+      layer = tf.batch_gather(layer, self._first_index_placeholder)
       # if embed_keep_prob < 1:
       #   layer = self.drop_func(layer, embed_keep_prob)
     return layer
@@ -235,39 +264,18 @@ class BERTVocab(CountVocab):
     return feed_dict
 
   #=============================================================
-  def open(self):
-    """"""
-
-    # self._multibucket.open()
-    return self
-
-  #=============================================================
-  def close(self):
-    """"""
-
-    # self._multibucket.close()
-    return
+  # def open(self):
+  #   """"""
+  #
+  #   # self._multibucket.open()
+  #   return self
 
   #=============================================================
-  def reset(self):
-    """"""
-
-    # Set the special tokens
-    special_tokens = [getattr(base_special_token, self._config.getstr(self, 'special_token_case'))() for
-                      base_special_token in self._base_special_tokens]
-    if self._config.getboolean(self, 'special_token_html'):
-      special_tokens = [u'<%s>' % special_token for special_token in special_tokens]
-
-    # Add special tokens to the object
-    for i, base_special_token in enumerate(self._base_special_tokens):
-      self.__dict__[base_special_token.upper() + '_IDX'] = i
-      self.__dict__[base_special_token.upper() + '_STR'] = special_tokens[i]
-
-    # Initialize the dictionaries
-    self._str2idx = dict(zip(special_tokens, range(len(special_tokens))))
-    self._idx2str = dict(zip(range(len(special_tokens)), special_tokens))
-
-    self._special_tokens = set(special_tokens)
+  # def close(self):
+  #   """"""
+  #
+  #   # self._multibucket.close()
+  #   return
 
   #=============================================================
   @property
@@ -276,9 +284,9 @@ class BERTVocab(CountVocab):
   @property
   def token_vocab_loadname(self):
     return self._config.getstr(self, 'token_vocab_loadname')
-  @property
-  def max_buckets(self):
-    return self._config.getint(self, 'max_buckets')
+  # @property
+  # def max_buckets(self):
+  #   return self._config.getint(self, 'max_buckets')
   # @property
   # def embed_keep_prob(self):
   #   return self._config.getfloat(self, 'embed_keep_prob')
@@ -303,15 +311,15 @@ class BERTVocab(CountVocab):
   # @property
   # def conv_width(self):
   #   return self._config.getint(self, 'conv_width')
-  @property
-  def embed_size(self):
-    return self._config.getint(self, 'embed_size')
+  # @property
+  # def embed_size(self):
+  #   return self._config.getint(self, 'embed_size')
   # @property
   # def recur_size(self):
   #   return self._config.getint(self, 'recur_size')
-  @property
-  def output_size(self):
-    return self._config.getint(self, 'output_size')
+  # @property
+  # def output_size(self):
+  #   return self._config.getint(self, 'output_size')
   # @property
   # def hidden_size(self):
   #   return self._config.getint(self, 'hidden_size')

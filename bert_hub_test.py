@@ -49,3 +49,5 @@ with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())
     ret = sess.run(bert_outputs)
 print(ret)
+print(ret['sequence_output'].shape)
+print(len())
