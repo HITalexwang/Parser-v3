@@ -63,18 +63,6 @@ class SubtokenVocab(CountVocab):
     with tf.variable_scope(variable_scope or self.classname) as scope:
       for i, placeholder in enumerate(self._multibucket.get_placeholders()):
 
-        # -----------------------------------------------------------------------------
-        import sys
-        cdl = []
-        if i == 0:
-          p0 = tf.compat.v1.print('\n================\n')
-          cdl.append(p0)
-        p1 = tf.compat.v1.print(i, self.placeholder, '\n', summarize=-1)
-        cdl.append(p1)
-        with tf.control_dependencies(cdl):
-          placeholder += tf.constant(0)
-        # -----------------------------------------------------------------------------
-
         if i:
           scope.reuse_variables()
         #with tf.device('/gpu:0'):

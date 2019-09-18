@@ -34,20 +34,23 @@ print(t)
 i = tokenizer.convert_tokens_to_ids(t)
 print(i)
 
-bert_module = hub.Module(BERT_MODEL_HUB, trainable=True)
-bert_inputs = dict(
-    input_ids=[i],
-    input_mask=[[0] * len(i)],
-    segment_ids=[[0] * len(i)]
-)
-bert_outputs = bert_module(
-    inputs=bert_inputs,
-    signature="tokens",
-    as_dict=True
-)
-with tf.Session() as sess:
-    sess.run(tf.global_variables_initializer())
-    ret = sess.run(bert_outputs)
-print(ret)
-print(ret['sequence_output'].shape)
-print(len())
+with tf.variable_scope('BBBBB'):
+    with tf.variable_scope('AAA'):
+        bert_module = hub.Module(BERT_MODEL_HUB, trainable=True)
+        bert_inputs = dict(
+            input_ids=[i],
+            input_mask=[[0] * len(i)],
+            segment_ids=[[0] * len(i)]
+        )
+        bert_outputs = bert_module(
+            inputs=bert_inputs,
+            signature="tokens",
+            as_dict=True
+        )
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            ret = sess.run(bert_outputs)
+        print(ret)
+        print(ret['sequence_output'].shape)
+v = tf.global_variables()
+print(v)

@@ -156,7 +156,11 @@ class CoNLLUDataset(set):
     
     for vocab in self:
       data = self._multibucket.get_data(vocab.classname, indices)
-      feed_dict = vocab.set_placeholders(data, feed_dict=feed_dict)
+      if 'BERT' in vocab.classname:
+        tokens = self._multibucket.get_tokens(vocab.classname, indices)
+        feed_dict = vocab.set_placeholders(data, tokens, feed_dict=feed_dict)
+      else:
+        feed_dict = vocab.set_placeholders(data, feed_dict=feed_dict)
     return feed_dict
   
   #=============================================================

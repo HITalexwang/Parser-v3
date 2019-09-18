@@ -71,79 +71,39 @@ class BERTVocab(CountVocab):
     # Initialize the BERT module
     self._wordpiece_placeholder = tf.placeholder(tf.int32, [None, None], self.classname + '_wordpiece')
     self._first_index_placeholder = tf.placeholder(tf.int32, [None, None], self.classname + '_first_index')
-    self._bert_module = hub.Module(self.bert_hub_path, trainable=self.trainable)
-    tokenization_info = self._bert_module(signature="tokenization_info", as_dict=True)
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    with tf.Session(config=config) as sess:
-      self.vocab_file, self.do_lower_case = sess.run([tokenization_info["vocab_file"],
-                                                      tokenization_info["do_lower_case"]])
-    self._full_tokenizer = bert.tokenization.FullTokenizer(vocab_file=self.vocab_file,
-                                                           do_lower_case=self.do_lower_case)
+    with tf.variable_scope(self._config._defaults['network_class']): # hack in the top module's scope
+      self._bert_module = hub.Module(self.bert_hub_path, trainable=self.trainable, name='BERT_module')
+      tokenization_info = self._bert_module(signature="tokenization_info", as_dict=True)
+      config = tf.ConfigProto()
+      config.gpu_options.allow_growth = True
+      with tf.Session(config=config) as sess:
+        self.vocab_file, self.do_lower_case = sess.run([tokenization_info["vocab_file"],
+                                                        tokenization_info["do_lower_case"]])
+      self._full_tokenizer = bert.tokenization.FullTokenizer(vocab_file=self.vocab_file,
+                                                             do_lower_case=self.do_lower_case)
     return
-  
-  #=============================================================
-  def get_input_tensor1(self, embed_keep_prob=None, variable_scope=None, reuse=True):
-    """"""
-    
-    # Default override
-    embed_keep_prob = embed_keep_prob or self.embed_keep_prob
-    input_embed_keep_prob = self.input_embed_keep_prob
-    with tf.variable_scope(variable_scope or self.field):
-      if self.variable is None:
-        with tf.device('/cpu:0'):
-          self.variable = tf.Variable(self.embed_placeholder, name=self.name+'Elmo', trainable=False)
-          tf.add_to_collection('non_save_variables', self.variable)
-      layer = embeddings.pretrained_embedding_lookup(self.variable, self.linear_size,
-                                                     self.placeholder,
-                                                     name=self.name,
-                                                     reuse=reuse,
-                                                     input_embed_keep_prob=input_embed_keep_prob)
-      if embed_keep_prob < 1:
-        layer = self.drop_func(layer, embed_keep_prob)
-    return layer
 
   #=============================================================
   def get_input_tensor(self, embed_keep_prob=None, nonzero_init=False, variable_scope=None, reuse=True):
     """"""
 
-    with tf.variable_scope(variable_scope or self.classname) as scope:
-      # for i, placeholder in enumerate(self._multibucket.get_placeholders()):
-      #   if i:
-      #     scope.reuse_variables()
+    # with tf.variable_scope(variable_scope or self.classname):
+    bert_inputs = dict(
+      input_ids=self._wordpiece_placeholder,
+      input_mask=tf.cast(self._wordpiece_placeholder > 0, tf.int32),
+      segment_ids=tf.zeros_like(self._wordpiece_placeholder)
+    )
+    bert_outputs = self._bert_module(
+      inputs=bert_inputs,
+      signature="tokens",
+      as_dict=True
+    )
+    layer = bert_outputs['sequence_output']
+    layer = tf.batch_gather(layer, self._first_index_placeholder)
 
-        # -----------------------------------------------------------------------------
-        # import sys
-        # cdl = []
-        # # if i == 0:
-        # #   p0 = tf.compat.v1.print('\n================\n')
-        # #   cdl.append(p0)
-        # p1 = tf.compat.v1.print(self.placeholder, '\n', summarize=-1)
-        # cdl.append(p1)
-        # with tf.control_dependencies(cdl):
-        #   self.placeholder += tf.constant(0)
-        # -----------------------------------------------------------------------------
-
-      # with tf.variable_scope('Embeddings'):
-      #   layer = embeddings.token_embedding_lookup(len(self), self.embed_size,
-      #                                              self.placeholder,
-      #                                              nonzero_init=True,
-      #                                              reuse=reuse)
-
-      bert_inputs = dict(
-        input_ids=self._wordpiece_placeholder,
-        input_mask=tf.cast(self._wordpiece_placeholder > 0, tf.int32),
-        segment_ids=tf.zeros_like(self._wordpiece_placeholder)
-      )
-      bert_outputs = self._bert_module(
-        inputs=bert_inputs,
-        signature="tokens",
-        as_dict=True
-      )
-      layer = bert_outputs['sequence_output']
-      layer = tf.batch_gather(layer, self._first_index_placeholder)
-      # if embed_keep_prob < 1:
-      #   layer = self.drop_func(layer, embed_keep_prob)
+    embed_keep_prob = embed_keep_prob or self.embed_keep_prob
+    if embed_keep_prob < 1:
+      layer = self.drop_func(layer, embed_keep_prob)
     return layer
 
   #=============================================================
@@ -222,7 +182,7 @@ class BERTVocab(CountVocab):
     return self._str2idx[token]
 
   #=============================================================
-  def set_placeholders(self, indices, feed_dict={}):
+  def set_placeholders(self, indices, tokens, feed_dict={}):
     """"""
 
     # unique_indices, inverse_indices = np.unique(indices, return_inverse=True)
@@ -232,14 +192,23 @@ class BERTVocab(CountVocab):
 
     all_wordpiece_list = []
     all_first_index_list = []
-    for data in indices:
+    for i, data in enumerate(indices):
       wordpiece_list = ['[CLS]']
       first_index_list = []
-      for word in data:
+      for j, word in enumerate(data):
         if word == 0:
           break
+        if word == self.PAD_IDX:
+          token = '[PAD]'
+        elif word == self.UNK_IDX:
+          # token = '[UNK]'
+          token = tokens[i][j]
+        elif word == self.ROOT_IDX:
+          token = '[unused1]'
+        else:
+          token = self.token(word)
         first_index_list.append(len(wordpiece_list))
-        wordpiece_list += self._full_tokenizer.wordpiece_tokenizer.tokenize(self.token(word))
+        wordpiece_list += self._full_tokenizer.wordpiece_tokenizer.tokenize(token)
       wordpiece_list += ['[SEP]']
       wordpiece_list = self._full_tokenizer.convert_tokens_to_ids(wordpiece_list)
       all_wordpiece_list.append(wordpiece_list)
@@ -284,9 +253,9 @@ class BERTVocab(CountVocab):
   # @property
   # def max_buckets(self):
   #   return self._config.getint(self, 'max_buckets')
-  # @property
-  # def embed_keep_prob(self):
-  #   return self._config.getfloat(self, 'embed_keep_prob')
+  @property
+  def embed_keep_prob(self):
+    return self._config.getfloat(self, 'embed_keep_prob')
   # @property
   # def conv_keep_prob(self):
   #   return self._config.getfloat(self, 'conv_keep_prob')
@@ -323,13 +292,13 @@ class BERTVocab(CountVocab):
   # @property
   # def bidirectional(self):
   #   return self._config.getboolean(self, 'bidirectional')
-  # @property
-  # def drop_func(self):
-  #   drop_func = self._config.getstr(self, 'drop_func')
-  #   if hasattr(embeddings, drop_func):
-  #     return getattr(embeddings, drop_func)
-  #   else:
-  #     raise AttributeError("module '{}' has no attribute '{}'".format(embeddings.__name__, drop_func))
+  @property
+  def drop_func(self):
+    drop_func = self._config.getstr(self, 'drop_func')
+    if hasattr(embeddings, drop_func):
+      return getattr(embeddings, drop_func)
+    else:
+      raise AttributeError("module '{}' has no attribute '{}'".format(embeddings.__name__, drop_func))
   # @property
   # def recur_func(self):
   #   recur_func = self._config.getstr(self, 'recur_func')
