@@ -149,8 +149,6 @@ class BERTVocab(CountVocab):
   #=============================================================
   def count(self, train_conllus):
     """"""
-
-    tokens = set()
     for train_conllu in train_conllus:
       with codecs.open(train_conllu, encoding='utf-8', errors='ignore') as f:
         for line in f:
@@ -158,16 +156,14 @@ class BERTVocab(CountVocab):
           if line and not line.startswith('#'):
             line = line.split('\t')
             token = line[self.conllu_idx] # conllu_idx is provided by the CoNLLUVocab
-            if token not in tokens:
-              tokens.add(token)
-              self._count(token)
+            self._count(token)
     self.index_by_counts()
     return True
 
   def _count(self, token):
     if not self.cased:
       token = token.lower()
-    self.counts.update(token)
+    self.counts[token] += 1
     return
 
   #=============================================================
