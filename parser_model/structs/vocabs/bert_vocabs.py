@@ -250,7 +250,8 @@ class BERTVocab(CountVocab):
       [np.pad(a, (0, all_wordpiece_max_len - len(a)), 'constant', constant_values=0) for a in all_wordpiece_list])
     feed_dict[self._wordpiece_placeholder] = all_wordpiece
 
-    all_first_index_max_len = max([len(a) for a in all_first_index_list])
+    # all_first_index_max_len = max([len(a) for a in all_first_index_list])
+    all_first_index_max_len = indices.shape[-1]
     all_first_index = np.stack(
       [np.pad(a, (0, all_first_index_max_len - len(a)), 'constant', constant_values=0) for a in all_first_index_list])
     feed_dict[self._first_index_placeholder] = all_first_index

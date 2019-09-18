@@ -67,6 +67,16 @@ class GraphParserNetwork(BaseNetwork):
           input_tensors.append(input_network.get_input_tensor(output, reuse=reuse))
       layer = tf.concat(input_tensors, 2)
 
+    # pr_1 = tf.print('\n=======\n', 'layer\n', tf.shape(layer), '\n=======\n')
+    # pr_2 = tf.print('\n=======\n', 'self.id_vocab.placeholder\n', tf.shape(self.id_vocab.placeholder), '\n=======\n')
+    # pr_3 = tf.print('\n=======\n', 'self._input_vocabs[0].placeholder\n', tf.shape(self._input_vocabs[0].placeholder), '\n=======\n')
+    # pr_4 = tf.print('\n=======\n', 'self._input_vocabs[0]._wordpiece_placeholder\n', tf.shape(self._input_vocabs[0]._wordpiece_placeholder),
+    #                 '\n=======\n')
+    # pr_5 = tf.print('\n=======\n', 'self._input_vocabs[0]._first_index_placeholder\n', tf.shape(self._input_vocabs[0]._first_index_placeholder),
+    #                 '\n=======\n')
+    #
+    # with tf.control_dependencies([pr_1, pr_2, pr_3, pr_4, pr_5]):
+
     n_nonzero = tf.to_float(tf.count_nonzero(layer, axis=-1, keep_dims=True))
     batch_size, bucket_size, input_size = nn.get_sizes(layer)
     layer *= input_size / (n_nonzero + tf.constant(1e-12))

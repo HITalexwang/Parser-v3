@@ -124,6 +124,7 @@ class BaseVocab(object):
 class SetVocab(BaseVocab):
   """"""
 
+  # _base_special_tokens = [u'@@pad@@', u'@@root@@', u'@@unk@@']
   _base_special_tokens = [u'pad', u'root', u'unk']
 
   #=============================================================
