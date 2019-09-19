@@ -95,25 +95,25 @@ class GraphParserNetwork(BaseNetwork):
               'token_weights3D': token_weights,
               'n_sequences': n_sequences}
     
-    conv_keep_prob = 1. if reuse else self.conv_keep_prob
-    recur_keep_prob = 1. if reuse else self.recur_keep_prob
-    recur_include_prob = 1. if reuse else self.recur_include_prob
-    
-    for i in six.moves.range(self.n_layers):
-      conv_width = self.first_layer_conv_width if not i else self.conv_width
-      with tf.variable_scope('RNN-{}'.format(i)):
-        layer, _ = recurrent.directed_RNN(layer, self.recur_size, seq_lengths,
-                                          bidirectional=self.bidirectional,
-                                          recur_cell=self.recur_cell,
-                                          conv_width=conv_width,
-                                          recur_func=self.recur_func,
-                                          conv_keep_prob=conv_keep_prob,
-                                          recur_include_prob=recur_include_prob,
-                                          recur_keep_prob=recur_keep_prob,
-                                          cifg=self.cifg,
-                                          highway=self.highway,
-                                          highway_func=self.highway_func,
-                                          bilin=self.bilin)
+    # conv_keep_prob = 1. if reuse else self.conv_keep_prob
+    # recur_keep_prob = 1. if reuse else self.recur_keep_prob
+    # recur_include_prob = 1. if reuse else self.recur_include_prob
+    #
+    # for i in six.moves.range(self.n_layers):
+    #   conv_width = self.first_layer_conv_width if not i else self.conv_width
+    #   with tf.variable_scope('RNN-{}'.format(i)):
+    #     layer, _ = recurrent.directed_RNN(layer, self.recur_size, seq_lengths,
+    #                                       bidirectional=self.bidirectional,
+    #                                       recur_cell=self.recur_cell,
+    #                                       conv_width=conv_width,
+    #                                       recur_func=self.recur_func,
+    #                                       conv_keep_prob=conv_keep_prob,
+    #                                       recur_include_prob=recur_include_prob,
+    #                                       recur_keep_prob=recur_keep_prob,
+    #                                       cifg=self.cifg,
+    #                                       highway=self.highway,
+    #                                       highway_func=self.highway_func,
+    #                                       bilin=self.bilin)
   
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
