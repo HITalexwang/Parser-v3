@@ -37,6 +37,7 @@ from parser_model.graph_outputs import GraphOutputs, TrainOutputs, DevOutputs
 from parser_model.structs import conllu_dataset
 from parser_model.structs import vocabs
 from parser_model.neural.optimizers import AdamOptimizer, AMSGradOptimizer
+from parser_model.neural.optimizers.bert_adam import create_optimizer
 
 #***************************************************************
 class BaseNetwork(object):
@@ -164,15 +165,23 @@ class BaseNetwork(object):
     regularization_loss = self.l2_reg * tf.losses.get_regularization_loss() if self.l2_reg else 0
 
     update_step = tf.assign_add(self.global_step, 1)
-    adam = AdamOptimizer(config=self._config)
-    adam_op = adam.minimize(train_outputs.loss + regularization_loss, \
-                            variables=tf.trainable_variables(scope=self.classname)) # returns the current step
+    if self.use_bert_adam:
+      adam_op = create_optimizer(loss=train_outputs.loss + regularization_loss,
+                                 init_lr=float(self._config._sections['Optimizer']['learning_rate']),
+                                 num_train_steps=self.max_steps,
+                                 num_warmup_steps=self.warm_up_steps,
+                                 use_tpu=False)
+    else:
+      adam = AdamOptimizer(config=self._config)
+      adam_op = adam.minimize(train_outputs.loss + regularization_loss, \
+                              variables=tf.trainable_variables(scope=self.classname)) # returns the current step
     adam_train_tensors = [adam_op, train_outputs.accuracies]
 
-    amsgrad = AMSGradOptimizer.from_optimizer(adam)
-    amsgrad_op = amsgrad.minimize(train_outputs.loss + regularization_loss, \
-                                  variables=tf.trainable_variables(scope=self.classname)) # returns the current step
-    amsgrad_train_tensors = [amsgrad_op, train_outputs.accuracies]
+    if self.switch_optimizers:
+      amsgrad = AMSGradOptimizer.from_optimizer(adam)
+      amsgrad_op = amsgrad.minimize(train_outputs.loss + regularization_loss, \
+                                    variables=tf.trainable_variables(scope=self.classname)) # returns the current step
+      amsgrad_train_tensors = [amsgrad_op, train_outputs.accuracies]
 
     dev_tensors = dev_outputs.accuracies
     # I think this needs to come after the optimizers
@@ -740,3 +749,9 @@ class BaseNetwork(object):
   @property
   def share_layer(self):
     return self._config.getboolean(self, 'share_layer')
+  @property
+  def use_bert_adam(self):
+    return self._config.getboolean(self, 'use_bert_adam')
+  @property
+  def warm_up_steps(self):
+    return self._config.getint(self, 'warm_up_steps')
