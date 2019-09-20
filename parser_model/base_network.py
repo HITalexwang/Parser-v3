@@ -168,6 +168,7 @@ class BaseNetwork(object):
     if self.use_bert_adam:
       adam_op = create_optimizer(loss=train_outputs.loss + regularization_loss,
                                  init_lr=float(self._config._sections['Optimizer']['learning_rate']),
+                                 bert_lr=float(self._config._sections['Optimizer']['bert_learning_rate']),
                                  num_train_steps=self.max_steps,
                                  num_warmup_steps=self.warm_up_steps,
                                  use_tpu=False)

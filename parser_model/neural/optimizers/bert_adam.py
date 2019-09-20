@@ -22,15 +22,23 @@ import re
 import tensorflow as tf
 
 
-def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
+def create_optimizer(loss, init_lr, bert_lr, num_train_steps, num_warmup_steps, use_tpu):
   """Creates an optimizer training op."""
   global_step = tf.train.get_or_create_global_step()
 
   learning_rate = tf.constant(value=init_lr, shape=[], dtype=tf.float32)
+  bert_learning_rate = tf.constant(value=bert_lr, shape=[], dtype=tf.float32)
 
   # Implements linear decay of the learning rate.
   learning_rate = tf.train.polynomial_decay(
       learning_rate,
+      global_step,
+      num_train_steps,
+      end_learning_rate=0.0,
+      power=1.0,
+      cycle=False)
+  bert_learning_rate = tf.train.polynomial_decay(
+      bert_learning_rate,
       global_step,
       num_train_steps,
       end_learning_rate=0.0,
@@ -47,11 +55,16 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
     warmup_steps_float = tf.cast(warmup_steps_int, tf.float32)
 
     warmup_percent_done = global_steps_float / warmup_steps_float
+
     warmup_learning_rate = init_lr * warmup_percent_done
+    bert_warmup_learning_rate = bert_lr * warmup_percent_done
 
     is_warmup = tf.cast(global_steps_int < warmup_steps_int, tf.float32)
+
     learning_rate = (
         (1.0 - is_warmup) * learning_rate + is_warmup * warmup_learning_rate)
+    bert_learning_rate = (
+        (1.0 - is_warmup) * bert_learning_rate + is_warmup * bert_warmup_learning_rate)
 
   # It is recommended that you use this optimizer for fine tuning, since this
   # is how the model was trained (note that the Adam m/v variables are NOT
@@ -62,19 +75,33 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
       beta_1=0.9,
       beta_2=0.999,
       epsilon=1e-6,
+      exclude_from_weight_decay=[])
+  bert_optimizer = AdamWeightDecayOptimizer(
+      learning_rate=bert_learning_rate,
+      weight_decay_rate=0.01,
+      beta_1=0.9,
+      beta_2=0.999,
+      epsilon=1e-6,
       exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"])
 
-  if use_tpu:
-    optimizer = tf.contrib.tpu.CrossShardOptimizer(optimizer)
+  # if use_tpu:
+  #   optimizer = tf.contrib.tpu.CrossShardOptimizer(optimizer)
 
   tvars = tf.trainable_variables()
-  grads = tf.gradients(loss, tvars)
+  vars = [v for v in tvars if 'bert' not in v.name]
+  bert_vars = [v for v in tvars if 'bert' in v.name]
 
+  tgrads = tf.gradients(loss, vars + bert_vars)
   # This is how the model was pre-trained.
-  (grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
+  (tgrads, _) = tf.clip_by_global_norm(tgrads, clip_norm=1.0)
+  grads = tgrads[:len(vars)]
+  bert_grads = tgrads[len(vars):]
 
   train_op = optimizer.apply_gradients(
-      zip(grads, tvars), global_step=global_step)
+      zip(grads, vars), global_step=global_step)
+  bert_train_op = bert_optimizer.apply_gradients(
+      zip(bert_grads, bert_vars), global_step=global_step)
+  train_op = tf.group(train_op, bert_train_op)
 
   # Normally the global step update is done inside of `apply_gradients`.
   # However, `AdamWeightDecayOptimizer` doesn't do this. But if you use
