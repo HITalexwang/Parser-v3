@@ -162,6 +162,16 @@ class BaseNetwork(object):
       dev_outputs = DevOutputs(*dev_graph, load=load, evals=self._evals, \
                                factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
 
+    for vocab in self.input_vocabs:
+      if 'BERT' in vocab.classname:
+        with Timer('Restoring BERT pretrained ckpt'):
+          bert_scope_name = self.classname + '/Embeddings/' + vocab.classname
+          bert_variables = [v for v in tf.global_variables(scope=bert_scope_name) if 'bert' in v.name]
+          bert_saver = tf.train.Saver({v.name[len(bert_scope_name) + 1:].rsplit(':', maxsplit=1)[0]: v for v in bert_variables})
+          bert_session_config = tf.ConfigProto()
+          bert_session_config.gpu_options.allow_growth = True
+          bert_saver.restore(tf.Session(config=bert_session_config), vocab.pretrained_ckpt)
+
     regularization_loss = self.l2_reg * tf.losses.get_regularization_loss() if self.l2_reg else 0
 
     update_step = tf.assign_add(self.global_step, 1)

@@ -30,14 +30,12 @@ from parser_model.neural import embeddings
 
 
 import bert
-from bert import run_classifier
-from bert import optimization
+from bert import modeling
 from bert import tokenization
 
 import tensorflow as tf
-import tensorflow_hub as hub
+# import tensorflow_hub as hub
 
-# BERT_MODEL_HUB = "/Users/longxud/Documents/Code/bert/hub_bert_cased_L-12_H-768_A-12"
 
 #***************************************************************
 class BERTVocab(CountVocab):
@@ -51,54 +49,50 @@ class BERTVocab(CountVocab):
 
     super(BERTVocab, self).__init__(config=config)
 
-    # # Set the special tokens
-    # special_tokens = [getattr(base_special_token, self._config.getstr(self, 'special_token_case'))() for
-    #                   base_special_token in self._base_special_tokens]
-    # if self._config.getboolean(self, 'special_token_html'):
-    #   special_tokens = [u'<%s>' % special_token for special_token in special_tokens]
-    #
-    # # Add special tokens to the object
-    # for i, base_special_token in enumerate(self._base_special_tokens):
-    #   self.__dict__[base_special_token.upper() + '_IDX'] = i
-    #   self.__dict__[base_special_token.upper() + '_STR'] = special_tokens[i]
-    #
-    # # Initialize the dictionaries
-    # self._str2idx = dict(zip(special_tokens, range(len(special_tokens))))
-    # self._idx2str = dict(zip(range(len(special_tokens)), special_tokens))
-    #
-    # self._special_tokens = set(special_tokens)
-
-    # Initialize the BERT module
     self._wordpiece_placeholder = tf.placeholder(tf.int32, [None, None], self.classname + '_wordpiece')
     self._first_index_placeholder = tf.placeholder(tf.int32, [None, None], self.classname + '_first_index')
-    with tf.variable_scope(self._config._defaults['network_class']): # hack in the top module's scope
-      self._bert_module = hub.Module(self.bert_hub_path, trainable=self.trainable, name='BERT_module')
-      tokenization_info = self._bert_module(signature="tokenization_info", as_dict=True)
-      config = tf.ConfigProto()
-      config.gpu_options.allow_growth = True
-      with tf.Session(config=config) as sess:
-        self.vocab_file, self.do_lower_case = sess.run([tokenization_info["vocab_file"],
-                                                        tokenization_info["do_lower_case"]])
-      self._full_tokenizer = bert.tokenization.FullTokenizer(vocab_file=self.vocab_file,
-                                                             do_lower_case=self.do_lower_case)
+    self._full_tokenizer = bert.tokenization.FullTokenizer(vocab_file=self.vocab_file,
+                                                           do_lower_case=self.do_lower_case)
+    self._bert_module = None
+    self._bert_config = None
+    # with tf.variable_scope(self._config._defaults['network_class']): # hack in the top module's scope
+    #   self._bert_module = hub.Module(self.bert_hub_path, trainable=self.trainable, name='BERT_module')
+    #   tokenization_info = self._bert_module(signature="tokenization_info", as_dict=True)
+    #   config = tf.ConfigProto()
+    #   config.gpu_options.allow_growth = True
+    #   with tf.Session(config=config) as sess:
+    #     self.vocab_file, self.do_lower_case = sess.run([tokenization_info["vocab_file"],
+    #                                                     tokenization_info["do_lower_case"]])
+
     return
 
   #=============================================================
-  def get_input_tensor(self, embed_keep_prob=None, nonzero_init=False, variable_scope=None, reuse=True):
+  def get_input_tensor(self, embed_keep_prob=None, variable_scope=None, reuse=True):
     """"""
 
-    # with tf.variable_scope(variable_scope or self.classname):
-    bert_inputs = dict(
-      input_ids=self._wordpiece_placeholder,
-      input_mask=tf.cast(self._wordpiece_placeholder > 0, tf.int32),
-      segment_ids=tf.zeros_like(self._wordpiece_placeholder)
-    )
-    bert_outputs = self._bert_module(
-      inputs=bert_inputs,
-      signature="tokens",
-      as_dict=True
-    )
-    layer = bert_outputs['sequence_output']
+    if self._bert_module is None:
+      self._bert_config = modeling.BertConfig.from_json_file(self.config_file)
+      with tf.variable_scope(variable_scope or self.classname, reuse=tf.AUTO_REUSE if reuse else reuse):
+        self._bert_module = modeling.BertModel(config=self._bert_config,
+                                               is_training=self.trainable,
+                                               input_ids=self._wordpiece_placeholder,
+                                               input_mask=tf.cast(self._wordpiece_placeholder > 0, tf.int32),
+                                               token_type_ids=tf.zeros_like(self._wordpiece_placeholder),
+                                               use_one_hot_embeddings=None,
+                                               scope='bert')
+    # bert_inputs = dict(
+    #   input_ids=self._wordpiece_placeholder,
+    #   input_mask=tf.cast(self._wordpiece_placeholder > 0, tf.int32),
+    #   segment_ids=tf.zeros_like(self._wordpiece_placeholder)
+    # )
+    # bert_outputs = self._bert_module(
+    #   inputs=bert_inputs,
+    #   signature="tokens",
+    #   as_dict=True
+    # )
+    # layer = bert_outputs['sequence_output']
+
+    layer = self._bert_module.get_sequence_output()
     layer = tf.batch_gather(layer, self._first_index_placeholder)
 
     embed_keep_prob = embed_keep_prob or self.embed_keep_prob
@@ -347,7 +341,19 @@ class BERTVocab(CountVocab):
     return self._config.getstr(self, 'bert_hub_path')
   @property
   def trainable(self):
-    return self._config.getstr(self, 'trainable')
+    return self._config.getboolean(self, 'trainable')
+  @property
+  def vocab_file(self):
+    return self._config.getstr(self, 'vocab_file')
+  @property
+  def do_lower_case(self):
+    return self._config.getboolean(self, 'do_lower_case')
+  @property
+  def config_file(self):
+    return self._config.getstr(self, 'config_file')
+  @property
+  def pretrained_ckpt(self):
+    return self._config.getstr(self, 'pretrained_ckpt')
 
 # #***************************************************************
 # class GraphBERTVocab(BERTVocab):
