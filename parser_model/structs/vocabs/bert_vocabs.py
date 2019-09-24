@@ -54,7 +54,7 @@ class BERTVocab(CountVocab):
     self._full_tokenizer = bert.tokenization.FullTokenizer(vocab_file=self.vocab_file,
                                                            do_lower_case=self.do_lower_case)
     self._bert_module = None
-    self._bert_config = None
+    self._bert_config = modeling.BertConfig.from_json_file(self.config_file)
     # with tf.variable_scope(self._config._defaults['network_class']): # hack in the top module's scope
     #   self._bert_module = hub.Module(self.bert_hub_path, trainable=self.trainable, name='BERT_module')
     #   tokenization_info = self._bert_module(signature="tokenization_info", as_dict=True)
@@ -70,8 +70,7 @@ class BERTVocab(CountVocab):
   def get_input_tensor(self, embed_keep_prob=None, variable_scope=None, reuse=True):
     """"""
 
-    self._bert_config = modeling.BertConfig.from_json_file(self.config_file)
-    with tf.variable_scope(variable_scope or self.classname, reuse=tf.AUTO_REUSE if reuse else reuse):
+    with tf.variable_scope(variable_scope or self.classname, reuse=reuse):
       self._bert_module = modeling.BertModel(config=self._bert_config,
                                              is_training=self.trainable,
                                              input_ids=self._wordpiece_placeholder,
