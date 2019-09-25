@@ -116,6 +116,7 @@ class BaseNetwork(object):
 
       with tf.variable_scope(self.classname, reuse=False):
         self.global_step = tf.Variable(0., trainable=False, name='Global_step')
+        tf.add_to_collection('non_save_variables', self.global_step)
       self._vocabs = set(extant_vocabs.values())
     return
 

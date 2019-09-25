@@ -153,6 +153,8 @@ class AdamWeightDecayOptimizer(tf.train.Optimizer):
           dtype=tf.float32,
           trainable=False,
           initializer=tf.zeros_initializer())
+      tf.add_to_collection('non_save_variables', m)
+      tf.add_to_collection('non_save_variables', v)
 
       # Standard Adam update.
       next_m = (
