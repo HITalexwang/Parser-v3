@@ -70,7 +70,7 @@ class BERTVocab(CountVocab):
   def get_input_tensor(self, embed_keep_prob=None, variable_scope=None, reuse=True):
     """"""
 
-    with tf.variable_scope(variable_scope or self.classname, reuse=reuse):
+    with tf.variable_scope(variable_scope or self.classname, reuse=tf.AUTO_REUSE if reuse else False):
       self._bert_module = modeling.BertModel(config=self._bert_config,
                                              is_training=self.trainable,
                                              input_ids=self._wordpiece_placeholder,
