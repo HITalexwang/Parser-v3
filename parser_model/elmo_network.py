@@ -29,8 +29,8 @@ import codecs
 import numpy as np
 import tensorflow as tf
 
-from parser.base_network import BaseNetwork
-from parser.neural import nn, nonlin, embeddings, recurrent, classifiers
+from parser_model.base_network import BaseNetwork
+from parser_model.neural import nn, nonlin, embeddings, recurrent, classifiers
 
 #***************************************************************
 class ElmoNetwork(BaseNetwork):
@@ -49,6 +49,7 @@ class ElmoNetwork(BaseNetwork):
         with tf.variable_scope(input_network.classname):
           input_tensors.append(input_network.get_input_tensor(output, reuse=reuse))
       layer = tf.concat(input_tensors, 2)
+
     n_nonzero = tf.to_float(tf.count_nonzero(layer, axis=-1, keep_dims=True))
     batch_size, bucket_size, input_size = nn.get_sizes(layer)
     layer *= input_size / (n_nonzero + tf.constant(1e-12))

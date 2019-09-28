@@ -26,7 +26,7 @@ import tensorflow as tf
 from .base_vocabs import BaseVocab 
 from . import conllu_vocabs as cv
 
-from parser.neural import nn, nonlin, classifiers
+from parser_model.neural import nn, nonlin, classifiers
 
 #***************************************************************
 class IndexVocab(BaseVocab):

@@ -28,11 +28,11 @@ from collections import Counter
 import numpy as np
 import tensorflow as tf
 
-from parser.structs.buckets import ListMultibucket
+from parser_model.structs.buckets import ListMultibucket
 from .base_vocabs import CountVocab
 from . import conllu_vocabs as cv
 
-from parser.neural import nn, nonlin, embeddings, recurrent, classifiers
+from parser_model.neural import nn, nonlin, embeddings, recurrent, classifiers
 
 #***************************************************************
 class SubtokenVocab(CountVocab):
@@ -62,6 +62,7 @@ class SubtokenVocab(CountVocab):
     layers = []
     with tf.variable_scope(variable_scope or self.classname) as scope:
       for i, placeholder in enumerate(self._multibucket.get_placeholders()):
+
         if i:
           scope.reuse_variables()
         #with tf.device('/gpu:0'):

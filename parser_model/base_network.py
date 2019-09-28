@@ -32,11 +32,12 @@ from tensorflow.python.client import timeline
 
 from debug.timer import Timer
 
-from parser.neural import nn, nonlin, embeddings, recurrent, classifiers
-from parser.graph_outputs import GraphOutputs, TrainOutputs, DevOutputs
-from parser.structs import conllu_dataset
-from parser.structs import vocabs
-from parser.neural.optimizers import AdamOptimizer, AMSGradOptimizer
+from parser_model.neural import nn, nonlin, embeddings, recurrent, classifiers
+from parser_model.graph_outputs import GraphOutputs, TrainOutputs, DevOutputs
+from parser_model.structs import conllu_dataset
+from parser_model.structs import vocabs
+from parser_model.neural.optimizers import AdamOptimizer, AMSGradOptimizer
+from parser_model.neural.optimizers.bert_adam import create_optimizer
 
 #***************************************************************
 class BaseNetwork(object):
@@ -50,6 +51,7 @@ class BaseNetwork(object):
 
     with Timer('Initializing the network (including pretrained vocab)'):
       self._config = config
+      self._use_pretrained = False
       self._use_elmo = False
       #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
@@ -114,6 +116,7 @@ class BaseNetwork(object):
 
       with tf.variable_scope(self.classname, reuse=False):
         self.global_step = tf.Variable(0., trainable=False, name='Global_step')
+        tf.add_to_collection('non_save_variables', self.global_step)
       self._vocabs = set(extant_vocabs.values())
     return
 
@@ -134,34 +137,68 @@ class BaseNetwork(object):
         factored_deptree = vocab.factorized
       elif vocab.field == 'semrel':
         factored_semgraph = vocab.factorized
+
     input_network_outputs = {}
     input_network_savers = []
     input_network_paths = []
+
     for input_network in self.input_networks:
       with tf.variable_scope(input_network.classname, reuse=False):
         input_network_outputs[input_network.classname] = input_network.build_graph(reuse=True)[0]
+
       network_variables = set(tf.global_variables(scope=input_network.classname))
       non_save_variables = set(tf.get_collection('non_save_variables'))
       network_save_variables = network_variables - non_save_variables
       saver = tf.train.Saver(list(network_save_variables))
       input_network_savers.append(saver)
       input_network_paths.append(self._config(self, input_network.classname+'_dir'))
+
     with tf.variable_scope(self.classname, reuse=False):
       train_graph = self.build_graph(input_network_outputs=input_network_outputs, reuse=False)
-      train_outputs = TrainOutputs(*train_graph, load=load, evals=self._evals, factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+      train_outputs = TrainOutputs(*train_graph, load=load, evals=self._evals, \
+                                   factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+
     with tf.variable_scope(self.classname, reuse=True):
       dev_graph = self.build_graph(input_network_outputs=input_network_outputs, reuse=True)
-      dev_outputs = DevOutputs(*dev_graph, load=load, evals=self._evals, factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+      dev_outputs = DevOutputs(*dev_graph, load=load, evals=self._evals, \
+                               factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+
     regularization_loss = self.l2_reg * tf.losses.get_regularization_loss() if self.l2_reg else 0
 
     update_step = tf.assign_add(self.global_step, 1)
-    adam = AdamOptimizer(config=self._config)
-    adam_op = adam.minimize(train_outputs.loss + regularization_loss, variables=tf.trainable_variables(scope=self.classname)) # returns the current step
+    if self.use_bert_adam:
+      adam_op = create_optimizer(loss=train_outputs.loss + regularization_loss,
+                                 init_lr=float(self._config._sections['Optimizer']['learning_rate']),
+                                 bert_lr=float(self._config._sections['Optimizer']['bert_learning_rate']),
+                                 num_train_steps=self.max_steps,
+                                 num_warmup_steps=self.warm_up_steps,
+                                 use_tpu=False)
+    else:
+      adam = AdamOptimizer(config=self._config)
+      adam_op = adam.minimize(train_outputs.loss + regularization_loss, \
+                              variables=tf.trainable_variables(scope=self.classname)) # returns the current step
     adam_train_tensors = [adam_op, train_outputs.accuracies]
-    amsgrad = AMSGradOptimizer.from_optimizer(adam)
-    amsgrad_op = amsgrad.minimize(train_outputs.loss + regularization_loss, variables=tf.trainable_variables(scope=self.classname)) # returns the current step
-    amsgrad_train_tensors = [amsgrad_op, train_outputs.accuracies]
+
+    if self.switch_optimizers:
+      amsgrad = AMSGradOptimizer.from_optimizer(adam)
+      amsgrad_op = amsgrad.minimize(train_outputs.loss + regularization_loss, \
+                                    variables=tf.trainable_variables(scope=self.classname)) # returns the current step
+      amsgrad_train_tensors = [amsgrad_op, train_outputs.accuracies]
+
     dev_tensors = dev_outputs.accuracies
+
+    # for vocab in self.input_vocabs:
+    #   if 'BERT' in vocab.classname:
+    #     with Timer('Restoring BERT pretrained ckpt'):
+    #       bert_scope_name = self.classname + '/Embeddings/' + vocab.classname
+    #       bert_variables = [v for v in tf.global_variables(scope=bert_scope_name) if 'bert' in v.name and 'adam' not in v.name]
+    #       bert_saver = tf.train.Saver({v.name[len(bert_scope_name) + 1:].rsplit(':', maxsplit=1)[0]: v for v in bert_variables})
+    #       bert_session_config = tf.ConfigProto()
+    #       bert_session_config.gpu_options.allow_growth = True
+    #       bert_session_config.allow_soft_placement = True
+    #       with tf.Session(config=bert_session_config) as sess:
+    #         bert_saver.restore(sess, vocab.pretrained_ckpt)
+
     # I think this needs to come after the optimizers
     if self.save_model_after_improvement or self.save_model_after_training:
       all_variables = set(tf.global_variables(scope=self.classname))
@@ -176,6 +213,7 @@ class BaseNetwork(object):
     with tf.Session(config=config) as sess:
       for saver, path in zip(input_network_savers, input_network_paths):
         saver.restore(sess, path)
+
       feed_dict = {}
       if self.use_elmo:
         feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
@@ -188,6 +226,15 @@ class BaseNetwork(object):
         #  self.elmo_vocabs[0].embed_placeholder:self.elmo_vocabs[0].embeddings})
       #else:
       sess.run(tf.global_variables_initializer(), feed_dict=feed_dict)
+
+      for vocab in self.input_vocabs:
+        if 'BERT' in vocab.classname:
+          with Timer('Restoring BERT pretrained ckpt'):
+            bert_scope_name = self.classname + '/Embeddings/' + vocab.classname
+            bert_variables = [v for v in tf.global_variables(scope=bert_scope_name) if 'bert' in v.name and 'adam' not in v.name]
+            bert_saver = tf.train.Saver({v.name[len(bert_scope_name) + 1:].rsplit(':', maxsplit=1)[0]: v for v in bert_variables})
+            bert_saver.restore(sess, vocab.pretrained_ckpt)
+
       #---
       os.makedirs(os.path.join(self.save_dir, 'profile'))
       options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
@@ -726,3 +773,9 @@ class BaseNetwork(object):
   @property
   def share_layer(self):
     return self._config.getboolean(self, 'share_layer')
+  @property
+  def use_bert_adam(self):
+    return self._config.getboolean(self, 'use_bert_adam')
+  @property
+  def warm_up_steps(self):
+    return self._config.getint(self, 'warm_up_steps')

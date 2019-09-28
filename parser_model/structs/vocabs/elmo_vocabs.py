@@ -35,9 +35,9 @@ import numpy as np
 import tensorflow as tf
 import h5py
  
-from parser.structs.vocabs.base_vocabs import SetVocab
+from parser_model.structs.vocabs.base_vocabs import SetVocab
 from . import conllu_vocabs as cv
-from parser.neural import embeddings
+from parser_model.neural import embeddings
 
 #***************************************************************
 # TODO maybe change self.name to something more like self._save_str?
