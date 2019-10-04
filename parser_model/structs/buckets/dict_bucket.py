@@ -29,7 +29,7 @@ class DictBucket(BaseBucket):
   """"""
   
   #=============================================================
-  def __init__(self, idx, depth, config=None):
+  def __init__(self, idx, depth, max_acc_depth=0, config=None):
     """"""
     
     super(DictBucket, self).__init__(idx, config=config)
@@ -38,6 +38,7 @@ class DictBucket(BaseBucket):
     self._indices = []
     self._tokens = []
     self._str2idx = {}
+    self._max_acc_depth = max_acc_depth
     
     return
   
@@ -90,6 +91,7 @@ class DictBucket(BaseBucket):
         print('Expected shape: {}\nsequence: {}'.format([len(sequence), self.depth], sequence))
         raise
     elif self.depth == -1:
+      is_arc = False
       # for graphs, sequence should be list of (idx, val) pairs
       for i, sequence in enumerate(self._indices):
         for j, node in enumerate(sequence):
@@ -99,11 +101,57 @@ class DictBucket(BaseBucket):
               data[i, j, edge] = v
             else:
               data[i, j, edge] = 1
-    
+              is_arc = True
+      if is_arc and self.max_acc_depth > 0:
+        acc_matrices = self.accessible_matrix(data, max_acc_depth=self.max_acc_depth)
+        # data[b][0] is the original graph data
+        # data[b][1-max] is the accessible matrices
+        data = np.concatenate([np.expand_dims(d, 1) for d in [data] + acc_matrices], 1)
+        #print (data.shape)
     super(DictBucket, self).close(data)
     
     return
   
+  #=============================================================
+  def floyd(self, matrix):
+    # Calculate the minimum distance between nodes in graph
+
+    # matrix[b][i][j] == 1 means wj is wi's head, thus their distance is 1
+    shape = matrix.shape
+    seq_len = shape[1]
+    dist_matrix = matrix + (1 - matrix) * 10000
+    for b in range(shape[0]):
+      for k in range(seq_len):
+        for i in range(seq_len):
+          for j in range(seq_len):
+            if dist_matrix[b, i, k] + dist_matrix[b, k, j] < dist_matrix[b, i, j]:
+              dist_matrix[b, i, j] = dist_matrix[b, i, k] + dist_matrix[b, k, j]
+    return dist_matrix
+
+  #=============================================================
+  def accessible_matrix(self, matrix, max_acc_depth=0, transpose=True):
+    """
+    Input:
+        matrix: adjacency matrix of the graph, matrix[b][i][j] == 1 means 
+                wj is wi's head, thus their distance is 1
+        max_acc_depth: number of accessible matrix, distance more than this 
+                will be accessible in the final matrix
+    """
+    # Get accessible matrix with max depth
+
+    acc_matrices = []
+    ones = np.ones(matrix.shape)
+    zeros = np.zeros(matrix.shape)
+    adjacency = matrix
+    if transpose:
+      adjacency = adjacency + np.transpose(adjacency, [0,2,1])
+    #print (adjacency)
+    dist_matrix = self.floyd(adjacency)
+    #print ('dist_matrix:\n', dist_matrix)
+    for d in range(max_acc_depth):
+      acc_matrices.append(np.where(dist_matrix <= d+1, ones, zeros))
+    return acc_matrices
+
   #=============================================================
   @property
   def depth(self):
@@ -111,3 +159,6 @@ class DictBucket(BaseBucket):
   @property
   def data_indices(self):
     return self._data
+  @property
+  def max_acc_depth(self):
+    return self._max_acc_depth

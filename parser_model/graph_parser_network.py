@@ -87,7 +87,9 @@ class GraphParserNetwork(BaseNetwork):
     n_sequences = tf.count_nonzero(tokens_per_sequence)
     seq_lengths = tokens_per_sequence+1
 
+    # this works as the mask (shape = [batch_size, bucket_size])
     root_weights = token_weights + (1-nn.greater(tf.range(bucket_size), 0))
+    # this is mask for arc/label prediction (shape = [batch_size, bucket_size, bucket_size])
     token_weights3D = tf.expand_dims(token_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
     tokens = {'n_tokens': n_tokens,
               'tokens_per_sequence': tokens_per_sequence,

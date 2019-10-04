@@ -301,7 +301,29 @@ class GraphIndexVocab(IndexVocab):
     
     kwargs['placeholder_shape'] = [None, None, None]
     super(GraphIndexVocab, self).__init__(*args, **kwargs)
+    if self.max_accessible_depth > 0:
+      self.accessible_placeholders = [tf.placeholder(tf.int32, [None, None, None], 
+                      name=self.classname+'acc-'+str(i)) for i in range(self.max_accessible_depth)]
+    else:
+      self.accessible_placeholders = None
     return
+
+  #=============================================================
+  def set_placeholders(self, indices, feed_dict={}):
+    """
+    Setting original graph placeholder as well as accessible matrices
+    """
+    # set accessible placeholders for graph attention matrix
+    if self.accessible_placeholders is not None:
+      #print (indices.shape)
+      feed_dict[self.placeholder] = indices[:,0,:,:]
+      for i in range(len(self.accessible_placeholders)):
+        feed_dict[self.accessible_placeholders[i]] = indices[:,i+1,:,:]
+      #print (feed_dict[self.placeholder])
+      #print (feed_dict[self.accessible_placeholders[0]])
+    else:
+      feed_dict[self.placeholder] = indices
+    return feed_dict
   
   #=============================================================
   def get_bilinear_discriminator(self, layer, token_weights, variable_scope=None, reuse=False):
@@ -500,6 +522,12 @@ class GraphIndexVocab(IndexVocab):
     else:
       raise ValueError('Key to GraphIndexVocab.__getitem__ must be (iterable of) strings or iterable of integers')
   
+  #=============================================================
+  @property
+  def max_accessible_depth(self):
+    return self._config.getint(self, 'max_accessible_depth')
+
+
 #***************************************************************
 class IDIndexVocab(IndexVocab, cv.IDVocab):
   pass
