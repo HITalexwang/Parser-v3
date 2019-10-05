@@ -126,18 +126,25 @@ class GraphParserNetwork(BaseNetwork):
                                                       hidden_act="gelu",
                                                       hidden_dropout_prob=self.hidden_dropout_prob,
                                                       attention_probs_dropout_prob=self.attention_probs_dropout_prob,
+                                                      acc_mask_dropout_prob=self.acc_mask_dropout_prob,
                                                       max_position_embeddings=self.max_position_embeddings,
-                                                      initializer_range=0.02)
-
-    with tf.variable_scope('Transformer'):
-      transformer = graph_transformer.GraphTransformer(config, not reuse, layer, 
-                                                        input_mask=root_weights)
-      # shape = [batch_size, seq_len, hidden_size]
-      layer = transformer.get_sequence_output()
-
+                                                      initializer_range=0.02,
+                                                      supervision=self.supervision)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
+
+    with tf.variable_scope('Transformer'):
+      # shape = [batch_size, seq_len, seq_len]
+      input_mask_3D = tf.expand_dims(root_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
+      transformer = graph_transformer.GraphTransformer(config, not reuse, layer, 
+                                                        input_mask=input_mask_3D,
+                                                        accessible_matrices=output_fields['semhead'].accessible_placeholders)
+      # shape = [batch_size, seq_len, hidden_size]
+      layer = transformer.get_sequence_output()
+      accessible_losses = transformer.get_accessible_losses()
+      acc_loss = tf.reduce_sum(accessible_losses)
+    
     with tf.variable_scope('Classifiers'):
       if 'semrel' in output_fields:
         vocab = output_fields['semrel']
@@ -158,6 +165,8 @@ class GraphParserNetwork(BaseNetwork):
             token_weights=token_weights3D,
             reuse=reuse)
         outputs['semgraph'] = labeled_outputs
+        outputs['semgraph']['loss'] += acc_loss
+        outputs['semgraph']['acc_loss'] = acc_loss
         self._evals.add('semgraph')
       elif 'semhead' in output_fields:
         vocab = output_fields['semhead']
@@ -192,5 +201,11 @@ class GraphParserNetwork(BaseNetwork):
   def attention_probs_dropout_prob(self):
     return self._config.getfloat(self, 'attention_probs_dropout_prob')
   @property
+  def acc_mask_dropout_prob(self):
+    return self._config.getfloat(self, 'acc_mask_dropout_prob')
+  @property
   def max_position_embeddings(self):
     return self._config.getint(self, 'max_position_embeddings')
+  @property
+  def supervision(self):
+    return self._config.getstr(self, 'supervision')

@@ -110,6 +110,9 @@ class GraphOutputs(object):
               'n_edges': 0,
               'sequences': [0]
             }
+          self.history['accessible'] = {
+              'loss': [0]
+            }
             
         elif field == 'deptree':
           for string in ('head', 'tree'):
@@ -447,6 +450,7 @@ class GraphOutputs(object):
         self.history['semgraph']['fp_tokens'] += output['n_false_positives']
         self.history['semgraph']['fn_tokens'] += output['n_false_negatives']
         self.history['semgraph']['sequences'][-1] += output['n_correct_sequences']
+        self.history['accessible']['loss'][-1] += output['acc_loss']
       elif field == 'deptree':
         if self._factored_deptree:
           self.history['deprel']['loss'][-1] += output['label_loss']
@@ -523,6 +527,13 @@ class GraphOutputs(object):
             value.append(0)
           else:
             self.history[field][key] = 0
+
+    self.history['accessible']['loss'][-1] /= n_batches
+    loss = self.history['accessible']['loss'][-1]
+    print('{:5}'.format('ACC'), end='')
+    print(' | ', end='')
+    print('Loss: {:.2e}\n'.format(loss), end='')
+    self.history['accessible']['loss'].append(0)
     
     self.history['speed']['toks/sec'].append(n_tokens / total_time)
     self.history['speed']['seqs/sec'].append(n_sequences / total_time)

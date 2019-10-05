@@ -26,6 +26,7 @@ import re
 import numpy as np
 import six
 import tensorflow as tf
+from parser_model.neural import nn
 
 
 class GraphTransformerConfig(object):
@@ -39,8 +40,10 @@ class GraphTransformerConfig(object):
                hidden_act="gelu",
                hidden_dropout_prob=0.1,
                attention_probs_dropout_prob=0.1,
+               acc_mask_dropout_prob=0.1,
                max_position_embeddings=512,
-               initializer_range=0.02):
+               initializer_range=0.02,
+               supervision='mask'):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -61,6 +64,7 @@ class GraphTransformerConfig(object):
         (e.g., 512 or 1024 or 2048).
       initializer_range: The stdev of the truncated_normal_initializer for
         initializing all weight matrices.
+      supervision: The supervision type. (i.e. `direct` or `mask`)
     """
     self.hidden_size = hidden_size
     self.num_hidden_layers = num_hidden_layers
@@ -69,8 +73,11 @@ class GraphTransformerConfig(object):
     self.intermediate_size = intermediate_size
     self.hidden_dropout_prob = hidden_dropout_prob
     self.attention_probs_dropout_prob = attention_probs_dropout_prob
+    self.acc_mask_dropout_prob = acc_mask_dropout_prob
     self.max_position_embeddings = max_position_embeddings
     self.initializer_range = initializer_range
+    self.supervision = supervision
+    assert supervision in ['direct', 'mask']
 
   @classmethod
   def from_dict(cls, json_object):
@@ -126,6 +133,7 @@ class GraphTransformer(object):
                is_training,
                input_tensor,
                input_mask=None,
+               accessible_matrices=None,
                scope=None):
     """Constructor for GraphTransformer.
 
@@ -152,6 +160,10 @@ class GraphTransformer(object):
 
     if input_mask is None:
       input_mask = tf.ones(shape=[batch_size, seq_length], dtype=tf.int32)
+    if accessible_matrices is not None:
+      if len(accessible_matrices) != config.num_hidden_layers:
+        raise ValueError(
+          "The number of accessible matrices does not match the number of attention layers.")
 
     with tf.variable_scope(scope, default_name="graph_transformer"):
       with tf.variable_scope("embeddings"):
@@ -176,14 +188,18 @@ class GraphTransformer(object):
         # This converts a 2D mask of shape [batch_size, seq_length] to a 3D
         # mask of shape [batch_size, seq_length, seq_length] which is used
         # for the attention scores.
-        attention_mask = create_attention_mask_from_input_mask(
-            input_tensor, input_mask)
+        if len(get_shape_list(input_mask)) == 3:
+          attention_mask = input_mask
+        else:
+          attention_mask = create_attention_mask_from_input_mask(
+              input_tensor, input_mask)
 
         # Run the stacked transformer.
         # `sequence_output` shape = [batch_size, seq_length, hidden_size].
-        self.all_encoder_layers = graph_transformer_model(
+        self.all_encoder_layers, self.accessible_losses = graph_transformer_model(
             input_tensor=self.embedding_output,
             attention_mask=attention_mask,
+            accessible_matrices=accessible_matrices,
             hidden_size=config.hidden_size,
             num_hidden_layers=config.num_hidden_layers,
             num_attention_heads=config.num_attention_heads,
@@ -191,8 +207,10 @@ class GraphTransformer(object):
             intermediate_act_fn=get_activation(config.hidden_act),
             hidden_dropout_prob=config.hidden_dropout_prob,
             attention_probs_dropout_prob=config.attention_probs_dropout_prob,
+            acc_mask_dropout_prob=config.acc_mask_dropout_prob,
             initializer_range=config.initializer_range,
-            do_return_all_layers=True)
+            do_return_all_layers=True,
+            supervision=config.supervision)
 
       self.sequence_output = self.all_encoder_layers[-1]
 
@@ -207,6 +225,9 @@ class GraphTransformer(object):
 
   def get_all_encoder_layers(self):
     return self.all_encoder_layers
+
+  def get_accessible_losses(self):
+    return self.accessible_losses
 
   def get_embedding_output(self):
     """Gets output of the embedding lookup (i.e., input to the transformer).
@@ -493,17 +514,20 @@ def create_attention_mask_from_input_mask(from_tensor, to_mask):
 def attention_layer(from_tensor,
                     to_tensor,
                     attention_mask=None,
+                    accessible_matrix=None,
                     num_attention_heads=1,
                     size_per_head=512,
                     query_act=None,
                     key_act=None,
                     value_act=None,
                     attention_probs_dropout_prob=0.0,
+                    acc_mask_dropout_prob=0.1,
                     initializer_range=0.02,
                     do_return_2d_tensor=False,
                     batch_size=None,
                     from_seq_length=None,
-                    to_seq_length=None):
+                    to_seq_length=None,
+                    supervision='mask'):
   """Performs multi-headed attention from `from_tensor` to `to_tensor`.
 
   This is an implementation of multi-headed attention based on "Attention
@@ -532,6 +556,8 @@ def attention_layer(from_tensor,
       from_seq_length, to_seq_length]. The values should be 1 or 0. The
       attention scores will effectively be set to -infinity for any positions in
       the mask that are 0, and will be unchanged for positions that are 1.
+    accessible_matrix: Tensor of shape [batch_size, seq_len, seq_len]. 
+      Supervision for the mask of the attention probs.
     num_attention_heads: int. Number of attention heads.
     size_per_head: int. Size of each attention head.
     query_act: (optional) Activation function for the query transform.
@@ -550,6 +576,7 @@ def attention_layer(from_tensor,
       of the 3D version of the `from_tensor`.
     to_seq_length: (Optional) If the input is 2D, this might be the seq length
       of the 3D version of the `to_tensor`.
+    supervision: supervision type (i.e. `direct` or `mask`)
 
   Returns:
     float Tensor of shape [batch_size, from_seq_length,
@@ -597,6 +624,7 @@ def attention_layer(from_tensor,
   from_tensor_2d = reshape_to_matrix(from_tensor)
   to_tensor_2d = reshape_to_matrix(to_tensor)
 
+  # Standard Attention
   # `query_layer` = [B*F, N*H]
   query_layer = tf.layers.dense(
       from_tensor_2d,
@@ -637,14 +665,65 @@ def attention_layer(from_tensor,
   attention_scores = tf.multiply(attention_scores,
                                  1.0 / math.sqrt(float(size_per_head)))
 
+  # Accessible Mask
+  if supervision == 'mask':
+    # shape = [B*F, H]
+    accessible_query = tf.layers.dense(
+        from_tensor_2d,
+        size_per_head,
+        activation=query_act,
+        name="accessible_query",
+        kernel_initializer=create_initializer(initializer_range))
+
+    # shape = [B*T, H]
+    accessible_key = tf.layers.dense(
+        to_tensor_2d,
+        size_per_head,
+        activation=key_act,
+        name="accessible_key",
+        kernel_initializer=create_initializer(initializer_range))
+
+    # shape = [B, F, H]
+    accessible_query = tf.reshape(accessible_query, [batch_size, from_seq_length, size_per_head])
+
+    # shape = [B, T, H]
+    accessible_key = tf.reshape(accessible_key, [batch_size, to_seq_length, size_per_head])
+
+    # shape = [B, F, T]
+    accessible_scores = tf.matmul(accessible_query, accessible_key, transpose_b=True)
+    accessible_scores = tf.multiply(accessible_scores,
+                                   1.0 / math.sqrt(float(size_per_head)))
+    # shape = [B, F, T]
+    accessible_mask = tf.nn.sigmoid(accessible_scores)
+    # shape = [B, N, F, T]
+    expanded_acc_mask = tf.stack([accessible_mask for i in range(num_attention_heads)], axis=1)
+    expanded_acc_mask = dropout(expanded_acc_mask, acc_mask_dropout_prob)
+
+    # `accessible_mask` is applied as a universal mask to all the attention_prob matrices
+    # shape = [B, N, F, T]
+    attention_scores = expanded_acc_mask * attention_scores
+
+    # [B, F, T], [B, F, T], [B, F, T] -> ()
+    accessible_loss = tf.losses.sigmoid_cross_entropy(accessible_matrix, accessible_scores, weights=attention_mask)
+
+    # Compute accuracy
+    # [B, F, T] -> [B, F, T]
+    predictions = nn.greater(accessible_scores, 0, dtype=tf.int32) * attention_mask
+    # [B, F, T] * [B, F, T] -> [B, F, T]
+    true_positives = predictions * accessible_matrix
+    # [B, F, T] -> ()
+    n_predictions = tf.reduce_sum(predictions)
+    n_targets = tf.reduce_sum(accessible_matrix)
+    n_true_positives = tf.reduce_sum(true_positives)
+
   if attention_mask is not None:
     # `attention_mask` = [B, 1, F, T]
-    attention_mask = tf.expand_dims(attention_mask, axis=[1])
+    attention_mask_ = tf.expand_dims(attention_mask, axis=[1])
 
     # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
     # masked positions, this operation will create a tensor which is 0.0 for
     # positions we want to attend and -10000.0 for masked positions.
-    adder = (1.0 - tf.cast(attention_mask, tf.float32)) * -10000.0
+    adder = (1.0 - tf.cast(attention_mask_, tf.float32)) * -10000.0
 
     # Since we are adding it to the raw scores before the softmax, this is
     # effectively the same as removing these entirely.
@@ -653,6 +732,20 @@ def attention_layer(from_tensor,
   # Normalize the attention scores to probabilities.
   # `attention_probs` = [B, N, F, T]
   attention_probs = tf.nn.softmax(attention_scores)
+
+  if supervision == 'direct':
+    # make the sum of each row be 1
+    # [B, F, T]
+    uniformed_acc_matrix = accessible_matrix / tf.reduce_sum(accessible_matrix, axis=-1, keep_dims=True)
+    # [B, F, T] -> [B, N, F, T]
+    stacked_acc_matrix = tf.stack([uniformed_acc_matrix for i in range(num_attention_heads)], axis=1)
+    # [B, F, T] -> [B, F]
+    sliced_attention_mask = attention_mask[:,:,0]
+    # [B, F] -> [B, N, F]
+    stacked_attention_mask = tf.stack([sliced_attention_mask for i in range(num_attention_heads)], axis=1)
+    # [B, N, F, T], [B, N, F, T], [B, N, F]
+    accessible_loss = tf.losses.softmax_cross_entropy(stacked_acc_matrix, attention_scores, 
+                                weights=stacked_attention_mask)
 
   # This is actually dropping out entire tokens to attend to, which might
   # seem a bit unusual, but is taken from the original Transformer paper.
@@ -683,11 +776,12 @@ def attention_layer(from_tensor,
         context_layer,
         [batch_size, from_seq_length, num_attention_heads * size_per_head])
 
-  return context_layer
+  return context_layer, accessible_loss
 
 
 def graph_transformer_model(input_tensor,
                       attention_mask=None,
+                      accessible_matrices=None,
                       hidden_size=512,
                       num_hidden_layers=6,
                       num_attention_heads=6,
@@ -695,8 +789,10 @@ def graph_transformer_model(input_tensor,
                       intermediate_act_fn=gelu,
                       hidden_dropout_prob=0.1,
                       attention_probs_dropout_prob=0.1,
+                      acc_mask_dropout_prob=0.1,
                       initializer_range=0.02,
-                      do_return_all_layers=False):
+                      do_return_all_layers=False,
+                      supervision='mask'):
   """Multi-headed, multi-layer Transformer from "Attention is All You Need".
 
   This is almost an exact implementation of the original Transformer encoder.
@@ -758,6 +854,7 @@ def graph_transformer_model(input_tensor,
   prev_output = reshape_to_matrix(input_tensor)
 
   all_layer_outputs = []
+  accessible_losses = []
   for layer_idx in range(num_hidden_layers):
     with tf.variable_scope("layer_%d" % layer_idx):
       layer_input = prev_output
@@ -765,19 +862,23 @@ def graph_transformer_model(input_tensor,
       with tf.variable_scope("attention"):
         attention_heads = []
         with tf.variable_scope("self"):
-          attention_head = attention_layer(
+          attention_head, accessible_loss = attention_layer(
               from_tensor=layer_input,
               to_tensor=layer_input,
               attention_mask=attention_mask,
+              accessible_matrix=accessible_matrices[layer_idx],
               num_attention_heads=num_attention_heads,
               size_per_head=attention_head_size,
               attention_probs_dropout_prob=attention_probs_dropout_prob,
+              acc_mask_dropout_prob=acc_mask_dropout_prob,
               initializer_range=initializer_range,
               do_return_2d_tensor=True,
               batch_size=batch_size,
               from_seq_length=seq_length,
-              to_seq_length=seq_length)
+              to_seq_length=seq_length,
+              supervision=supervision)
           attention_heads.append(attention_head)
+          accessible_losses.append(accessible_loss)
 
         attention_output = None
         if len(attention_heads) == 1:
@@ -821,10 +922,10 @@ def graph_transformer_model(input_tensor,
     for layer_output in all_layer_outputs:
       final_output = reshape_from_matrix(layer_output, input_shape)
       final_outputs.append(final_output)
-    return final_outputs
+    return final_outputs, accessible_losses
   else:
     final_output = reshape_from_matrix(prev_output, input_shape)
-    return final_output
+    return final_output, accessible_losses
 
 
 def get_shape_list(tensor, expected_rank=None, name=None):
