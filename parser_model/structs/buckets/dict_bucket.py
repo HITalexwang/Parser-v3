@@ -145,8 +145,9 @@ class DictBucket(BaseBucket):
     adjacency = matrix
     if transpose:
       adjacency = adjacency + np.transpose(adjacency, [0,2,1])
-    #print (adjacency)
     dist_matrix = self.floyd(adjacency)
+    # force the entries in diagonal to be 0, thus self loop distance is 0
+    dist_matrix = dist_matrix * (1 - np.diag(np.ones(matrix.shape[1])).astype(int))
     #print ('dist_matrix:\n', dist_matrix)
     for d in range(max_acc_depth):
       acc_matrices.append(np.where(dist_matrix <= d+1, ones, zeros))

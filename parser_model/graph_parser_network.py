@@ -31,6 +31,7 @@ import tensorflow as tf
 
 from parser_model.base_network import BaseNetwork
 from parser_model.neural import nn, nonlin, embeddings, recurrent, classifiers
+from parser_model.neural import graph_transformer
 
 #***************************************************************
 class GraphParserNetwork(BaseNetwork):
@@ -65,6 +66,7 @@ class GraphParserNetwork(BaseNetwork):
       for input_network, output in input_network_outputs:
         with tf.variable_scope(input_network.classname):
           input_tensors.append(input_network.get_input_tensor(output, reuse=reuse))
+      #print ([t.shape.as_list() for t in input_tensors])
       layer = tf.concat(input_tensors, 2)
 
     # pr_1 = tf.print('\n=======\n', 'layer\n', tf.shape(layer), '\n=======\n')
@@ -116,7 +118,24 @@ class GraphParserNetwork(BaseNetwork):
     #                                       highway=self.highway,
     #                                       highway_func=self.highway_func,
     #                                       bilin=self.bilin)
-  
+    
+    config = graph_transformer.GraphTransformerConfig(hidden_size=self.hidden_size,
+                                                      num_hidden_layers=self.n_layers,
+                                                      num_attention_heads=self.n_attention_heads,
+                                                      intermediate_size=self.intermediate_size,
+                                                      hidden_act="gelu",
+                                                      hidden_dropout_prob=self.hidden_dropout_prob,
+                                                      attention_probs_dropout_prob=self.attention_probs_dropout_prob,
+                                                      max_position_embeddings=self.max_position_embeddings,
+                                                      initializer_range=0.02)
+
+    with tf.variable_scope('Transformer'):
+      transformer = graph_transformer.GraphTransformer(config, not reuse, layer, 
+                                                        input_mask=root_weights)
+      # shape = [batch_size, seq_len, hidden_size]
+      layer = transformer.get_sequence_output()
+
+
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
     with tf.variable_scope('Classifiers'):
@@ -154,3 +173,24 @@ class GraphParserNetwork(BaseNetwork):
   @property
   def sum_pos(self):
     return self._config.getboolean(self, 'sum_pos')
+  @property
+  def hidden_size(self):
+    return self._config.getint(self, 'hidden_size')
+  @property
+  def intermediate_size(self):
+    return self._config.getint(self, 'intermediate_size')
+  @property
+  def n_layers(self):
+    return self._config.getint(self, 'n_layers')
+  @property
+  def n_attention_heads(self):
+    return self._config.getint(self, 'n_attention_heads')
+  @property
+  def hidden_dropout_prob(self):
+    return self._config.getfloat(self, 'hidden_dropout_prob')
+  @property
+  def attention_probs_dropout_prob(self):
+    return self._config.getfloat(self, 'attention_probs_dropout_prob')
+  @property
+  def max_position_embeddings(self):
+    return self._config.getint(self, 'max_position_embeddings')

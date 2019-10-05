@@ -32,7 +32,6 @@ class GraphTransformerConfig(object):
   """Configuration for `GraphTransformer`."""
 
   def __init__(self,
-               vocab_size,
                hidden_size=512,
                num_hidden_layers=6,
                num_attention_heads=6,
@@ -41,12 +40,10 @@ class GraphTransformerConfig(object):
                hidden_dropout_prob=0.1,
                attention_probs_dropout_prob=0.1,
                max_position_embeddings=512,
-               type_vocab_size=16,
                initializer_range=0.02):
     """Constructs GraphTransformerConfig.
 
     Args:
-      vocab_size: Vocabulary size of `inputs_ids` in `GraphTransformer`.
       hidden_size: Size of the encoder layers and the pooler layer.
       num_hidden_layers: Number of hidden layers in the Transformer encoder.
       num_attention_heads: Number of attention heads for each attention layer in
@@ -62,12 +59,9 @@ class GraphTransformerConfig(object):
       max_position_embeddings: The maximum sequence length that this model might
         ever be used with. Typically set this to something large just in case
         (e.g., 512 or 1024 or 2048).
-      type_vocab_size: The vocabulary size of the `token_type_ids` passed into
-        `GraphTransformer`.
       initializer_range: The stdev of the truncated_normal_initializer for
         initializing all weight matrices.
     """
-    self.vocab_size = vocab_size
     self.hidden_size = hidden_size
     self.num_hidden_layers = num_hidden_layers
     self.num_attention_heads = num_attention_heads
@@ -76,13 +70,12 @@ class GraphTransformerConfig(object):
     self.hidden_dropout_prob = hidden_dropout_prob
     self.attention_probs_dropout_prob = attention_probs_dropout_prob
     self.max_position_embeddings = max_position_embeddings
-    self.type_vocab_size = type_vocab_size
     self.initializer_range = initializer_range
 
   @classmethod
   def from_dict(cls, json_object):
     """Constructs a `GraphTransformerConfig` from a Python dictionary of parameters."""
-    config = GraphTransformerConfig(vocab_size=None)
+    config = GraphTransformerConfig()
     for (key, value) in six.iteritems(json_object):
       config.__dict__[key] = value
     return config
@@ -153,7 +146,7 @@ class GraphTransformer(object):
       config.hidden_dropout_prob = 0.0
       config.attention_probs_dropout_prob = 0.0
 
-    input_shape = get_shape_list(input_tensors, expected_rank=3)
+    input_shape = get_shape_list(input_tensor, expected_rank=3)
     batch_size = input_shape[0]
     seq_length = input_shape[1]
 
@@ -162,6 +155,11 @@ class GraphTransformer(object):
 
     with tf.variable_scope(scope, default_name="graph_transformer"):
       with tf.variable_scope("embeddings"):
+        # project input tensor to hidden_size
+        input_tensor = tf.layers.dense(
+          input_tensor,
+          config.hidden_size,
+          kernel_initializer=create_initializer(config.initializer_range))
 
         # Add positional embeddings and token type embeddings, then layer
         # normalize and perform dropout.
