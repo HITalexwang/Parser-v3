@@ -110,7 +110,15 @@ class GraphOutputs(object):
               'n_edges': 0,
               'sequences': [0]
             }
-          self.history['accessible'] = {
+          if 'n_acc_true_positives' in self._accuracies[field]:
+            self.history['accessible'] = {
+              'loss': [0],
+              'tokens': [0],
+              'fp_tokens': 0,
+              'fn_tokens': 0
+            }
+          elif 'acc_loss' in self._accuracies[field]:
+            self.history['accessible'] = {
               'loss': [0]
             }
             
@@ -450,7 +458,12 @@ class GraphOutputs(object):
         self.history['semgraph']['fp_tokens'] += output['n_false_positives']
         self.history['semgraph']['fn_tokens'] += output['n_false_negatives']
         self.history['semgraph']['sequences'][-1] += output['n_correct_sequences']
-        self.history['accessible']['loss'][-1] += output['acc_loss']
+        if 'accessible' in self.history:
+          self.history['accessible']['loss'][-1] += output['acc_loss']
+          if 'tokens' in self.history['accessible']:
+            self.history['accessible']['tokens'][-1] += output['n_acc_true_positives']
+            self.history['accessible']['fp_tokens'] += output['n_acc_false_positives']
+            self.history['accessible']['fn_tokens'] += output['n_acc_false_negatives']
       elif field == 'deptree':
         if self._factored_deptree:
           self.history['deprel']['loss'][-1] += output['label_loss']
@@ -528,12 +541,25 @@ class GraphOutputs(object):
           else:
             self.history[field][key] = 0
 
-    self.history['accessible']['loss'][-1] /= n_batches
-    loss = self.history['accessible']['loss'][-1]
-    print('{:5}'.format('ACC'), end='')
-    print(' | ', end='')
-    print('Loss: {:.2e}\n'.format(loss), end='')
-    self.history['accessible']['loss'].append(0)
+    if 'accessible' in self.history:
+      field = 'accessible'
+      self.history[field]['loss'][-1] /= n_batches
+      loss = self.history[field]['loss'][-1]
+      self.history[field]['loss'].append(0)
+      print('{:5}'.format('ACC'), end='')
+      print(' | ', end='')
+      print('Loss: {:.2e}'.format(loss), end='')
+      if 'tokens' in self.history[field]:
+        self.history[field]['tokens'][-1] = self.compute_token_F1(field) * 100
+        acc = self.history[field]['tokens'][-1]
+        print(' | ', end='')
+        print('Acc: {:5.2f}\n'.format(acc), end='')
+        self.history[field]['tokens'].append(0)
+        self.history[field]['fp_tokens'] = 0
+        self.history[field]['fn_tokens'] = 0
+      else:
+        print ('\n', end='')
+    
     
     self.history['speed']['toks/sec'].append(n_tokens / total_time)
     self.history['speed']['seqs/sec'].append(n_sequences / total_time)

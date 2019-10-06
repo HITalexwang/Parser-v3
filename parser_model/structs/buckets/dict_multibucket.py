@@ -38,7 +38,8 @@ class DictMultibucket(BaseMultibucket, dict):
     
     for vocab in vocabs:
       if hasattr(vocab, 'max_accessible_depth'):
-        self[vocab.classname] = [DictBucket(idx, vocab.depth, max_acc_depth=vocab.max_accessible_depth, config=config) for idx in six.moves.range(max_buckets)]
+        self[vocab.classname] = [DictBucket(idx, vocab.depth, max_acc_depth=vocab.max_accessible_depth,
+                                  transpose_adjacency=vocab.transpose_adjacency, config=config) for idx in six.moves.range(max_buckets)]
       else:
         self[vocab.classname] = [DictBucket(idx, vocab.depth, config=config) for idx in six.moves.range(max_buckets)]
     

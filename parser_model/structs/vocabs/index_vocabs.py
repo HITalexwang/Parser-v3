@@ -526,7 +526,9 @@ class GraphIndexVocab(IndexVocab):
   @property
   def max_accessible_depth(self):
     return self._config.getint(self, 'max_accessible_depth')
-
+  @property
+  def transpose_adjacency(self):
+    return self._config.getboolean(self, 'transpose_adjacency')
 
 #***************************************************************
 class IDIndexVocab(IndexVocab, cv.IDVocab):

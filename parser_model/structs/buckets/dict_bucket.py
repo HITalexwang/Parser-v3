@@ -29,7 +29,7 @@ class DictBucket(BaseBucket):
   """"""
   
   #=============================================================
-  def __init__(self, idx, depth, max_acc_depth=0, config=None):
+  def __init__(self, idx, depth, max_acc_depth=0, transpose_adjacency=True, config=None):
     """"""
     
     super(DictBucket, self).__init__(idx, config=config)
@@ -39,6 +39,7 @@ class DictBucket(BaseBucket):
     self._tokens = []
     self._str2idx = {}
     self._max_acc_depth = max_acc_depth
+    self._transpose_adjacency = transpose_adjacency
     
     return
   
@@ -103,7 +104,8 @@ class DictBucket(BaseBucket):
               data[i, j, edge] = 1
               is_arc = True
       if is_arc and self.max_acc_depth > 0:
-        acc_matrices = self.accessible_matrix(data, max_acc_depth=self.max_acc_depth)
+        acc_matrices = self.accessible_matrix(data, max_acc_depth=self.max_acc_depth, 
+                                                transpose=self.transpose_adjacency)
         # data[b][0] is the original graph data
         # data[b][1-max] is the accessible matrices
         data = np.concatenate([np.expand_dims(d, 1) for d in [data] + acc_matrices], 1)
@@ -163,3 +165,6 @@ class DictBucket(BaseBucket):
   @property
   def max_acc_depth(self):
     return self._max_acc_depth
+  @property
+  def transpose_adjacency(self):
+    return self._transpose_adjacency

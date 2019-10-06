@@ -142,8 +142,11 @@ class GraphParserNetwork(BaseNetwork):
                                                         accessible_matrices=output_fields['semhead'].accessible_placeholders)
       # shape = [batch_size, seq_len, hidden_size]
       layer = transformer.get_sequence_output()
-      accessible_losses = transformer.get_accessible_losses()
-      acc_loss = tf.reduce_sum(accessible_losses)
+      acc_outputs = None
+      if self.supervision in ['mask', 'direct']:
+        acc_outputs = transformer.get_accessible_outputs()
+        for field in acc_outputs:
+          acc_outputs[field] = tf.reduce_sum(acc_outputs[field])
     
     with tf.variable_scope('Classifiers'):
       if 'semrel' in output_fields:
@@ -165,8 +168,10 @@ class GraphParserNetwork(BaseNetwork):
             token_weights=token_weights3D,
             reuse=reuse)
         outputs['semgraph'] = labeled_outputs
-        outputs['semgraph']['loss'] += acc_loss
-        outputs['semgraph']['acc_loss'] = acc_loss
+        if acc_outputs is not None:
+          outputs['semgraph']['loss'] += acc_outputs['acc_loss']
+          for field in acc_outputs:
+            outputs['semgraph'][field] = acc_outputs[field]
         self._evals.add('semgraph')
       elif 'semhead' in output_fields:
         vocab = output_fields['semhead']
