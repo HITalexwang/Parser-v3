@@ -19,6 +19,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 import six
+import os
 
 import numpy as np
 
@@ -30,7 +31,7 @@ class DictMultibucket(BaseMultibucket, dict):
   """"""
   
   #=============================================================
-  def __init__(self, vocabs, max_buckets=2, config=None):
+  def __init__(self, vocabs, max_buckets=2, config=None, setname='train'):
     """"""
     
     super(DictMultibucket, self).__init__(max_buckets, config=config)
@@ -39,7 +40,9 @@ class DictMultibucket(BaseMultibucket, dict):
     for vocab in vocabs:
       if hasattr(vocab, 'max_accessible_depth'):
         self[vocab.classname] = [DictBucket(idx, vocab.depth, max_acc_depth=vocab.max_accessible_depth,
-                                  transpose_adjacency=vocab.transpose_adjacency, config=config) for idx in six.moves.range(max_buckets)]
+                                  transpose_adjacency=vocab.transpose_adjacency, config=config,
+                                  save_as_pickle=vocab.save_as_pickle, acc_loadname=os.path.join(
+                                    vocab.acc_loadpath, setname+'-acc_bkt-'+str(idx)+'.pkl')) for idx in six.moves.range(max_buckets)]
       else:
         self[vocab.classname] = [DictBucket(idx, vocab.depth, config=config) for idx in six.moves.range(max_buckets)]
     

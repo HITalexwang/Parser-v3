@@ -19,8 +19,14 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import os
 import numpy as np
 import tensorflow as tf
+
+try:
+  import cPickle as pkl
+except ImportError:
+  import pickle as pkl
 
 from .base_bucket import BaseBucket
 
@@ -29,7 +35,8 @@ class DictBucket(BaseBucket):
   """"""
   
   #=============================================================
-  def __init__(self, idx, depth, max_acc_depth=0, transpose_adjacency=True, config=None):
+  def __init__(self, idx, depth, max_acc_depth=0, transpose_adjacency=True, config=None,
+                save_as_pickle=True, acc_loadname=None):
     """"""
     
     super(DictBucket, self).__init__(idx, config=config)
@@ -40,6 +47,8 @@ class DictBucket(BaseBucket):
     self._str2idx = {}
     self._max_acc_depth = max_acc_depth
     self._transpose_adjacency = transpose_adjacency
+    self._save_as_pickle = save_as_pickle
+    self._acc_loadname = acc_loadname
     
     return
   
@@ -104,11 +113,16 @@ class DictBucket(BaseBucket):
               data[i, j, edge] = 1
               is_arc = True
       if is_arc and self.max_acc_depth > 0:
-        acc_matrices = self.accessible_matrix(data, max_acc_depth=self.max_acc_depth, 
+        if self.acc_loadname and os.path.exists(self.acc_loadname):
+          self.load()
+        else:
+          self._acc_matrices = self.accessible_matrix(data, max_acc_depth=self.max_acc_depth, 
                                                 transpose=self.transpose_adjacency)
+        if self.save_as_pickle:
+          self.dump()
         # data[b][0] is the original graph data
         # data[b][1-max] is the accessible matrices
-        data = np.concatenate([np.expand_dims(d, 1) for d in [data] + acc_matrices], 1)
+        data = np.concatenate([np.expand_dims(d, 1) for d in [data] + self.acc_matrices], 1)
         #print (data.shape)
     super(DictBucket, self).close(data)
     
@@ -156,6 +170,30 @@ class DictBucket(BaseBucket):
     return acc_matrices
 
   #=============================================================
+  def dump(self):
+    if self.save_as_pickle and not os.path.exists(self.acc_loadname):
+      os.makedirs(os.path.dirname(self.acc_loadname), exist_ok=True)
+      with open(self.acc_loadname, 'wb') as f:
+        pkl.dump(self.acc_matrices, f, protocol=pkl.HIGHEST_PROTOCOL)
+    return
+
+  #=============================================================
+  def load(self):
+    """"""
+
+    if self.acc_loadname and os.path.exists(self.acc_loadname):
+      acc_filename = self.acc_loadname
+    else:
+      self._loaded = False
+      return False
+    print ('## Loading pre-generated accessible matrix from \'{}\''.format(self.acc_loadname))
+    with open(acc_filename, 'rb') as f:
+      self._acc_matrices = pkl.load(f, encoding='utf-8', errors='ignore')
+    self._loaded = True
+    return True
+
+
+  #=============================================================
   @property
   def depth(self):
     return self._depth
@@ -168,3 +206,12 @@ class DictBucket(BaseBucket):
   @property
   def transpose_adjacency(self):
     return self._transpose_adjacency
+  @property
+  def save_as_pickle(self):
+    return self._save_as_pickle
+  @property
+  def acc_loadname(self):
+    return self._acc_loadname
+  @property
+  def acc_matrices(self):
+    return self._acc_matrices

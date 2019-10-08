@@ -51,7 +51,8 @@ class CoNLLUDataset(set):
     
     super(CoNLLUDataset, self).__init__(vocabs)
     
-    self._multibucket = DictMultibucket(vocabs, max_buckets=config.getint(self, 'max_buckets'), config=config)
+    self._multibucket = DictMultibucket(vocabs, max_buckets=config.getint(self, 'max_buckets'), config=config,
+                                        setname=self.setname)
     self._is_open = False
     self._config = config
     self._conllu_files = conllu_files

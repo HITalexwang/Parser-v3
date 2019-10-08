@@ -529,6 +529,13 @@ class GraphIndexVocab(IndexVocab):
   @property
   def transpose_adjacency(self):
     return self._config.getboolean(self, 'transpose_adjacency')
+  @property
+  def save_as_pickle(self):
+    return self._config.getboolean(self, 'save_as_pickle')
+  @property
+  def acc_loadpath(self):
+    return self._config.getstr(self, 'acc_loadpath')
+
 
 #***************************************************************
 class IDIndexVocab(IndexVocab, cv.IDVocab):
