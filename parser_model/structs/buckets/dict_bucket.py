@@ -113,7 +113,10 @@ class DictBucket(BaseBucket):
               data[i, j, edge] = 1
               is_arc = True
       if is_arc and self.max_acc_depth > 0:
-        if self.acc_loadname and os.path.exists(self.acc_loadname):
+        # save time while predicting
+        if os.path.basename(self.acc_loadname).startswith('test'):
+          self._acc_matrices = [data] * self.max_acc_depth
+        elif self.acc_loadname and os.path.exists(self.acc_loadname):
           self.load()
         else:
           self._acc_matrices = self.accessible_matrix(data, max_acc_depth=self.max_acc_depth, 
@@ -123,7 +126,7 @@ class DictBucket(BaseBucket):
         # data[b][0] is the original graph data
         # data[b][1-max] is the accessible matrices
         data = np.concatenate([np.expand_dims(d, 1) for d in [data] + self.acc_matrices], 1)
-        #print (data.shape)
+        #print (data)
     super(DictBucket, self).close(data)
     
     return
