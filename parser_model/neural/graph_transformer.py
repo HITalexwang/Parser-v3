@@ -43,7 +43,8 @@ class GraphTransformerConfig(object):
                acc_mask_dropout_prob=0.1,
                max_position_embeddings=512,
                initializer_range=0.02,
-               supervision='mask'):
+               supervision='mask',
+               smoothing_rate=0):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -77,6 +78,7 @@ class GraphTransformerConfig(object):
     self.max_position_embeddings = max_position_embeddings
     self.initializer_range = initializer_range
     self.supervision = supervision
+    self.smoothing_rate = smoothing_rate
     assert supervision in ['direct', 'mask', 'none']
 
   @classmethod
@@ -213,7 +215,8 @@ class GraphTransformer(object):
             acc_mask_dropout_prob=config.acc_mask_dropout_prob,
             initializer_range=config.initializer_range,
             do_return_all_layers=True,
-            supervision=config.supervision)
+            supervision=config.supervision,
+            smoothing_rate=config.smoothing_rate)
 
       self.sequence_output = self.all_encoder_layers[-1]
 
@@ -530,7 +533,8 @@ def attention_layer(from_tensor,
                     batch_size=None,
                     from_seq_length=None,
                     to_seq_length=None,
-                    supervision='mask'):
+                    supervision='mask',
+                    smoothing_rate=0):
   """Performs multi-headed attention from `from_tensor` to `to_tensor`.
 
   This is an implementation of multi-headed attention based on "Attention
@@ -707,8 +711,10 @@ def attention_layer(from_tensor,
     # shape = [B, N, F, T]
     attention_scores = expanded_acc_mask * attention_scores
 
+    # accessible_matrix = accessible_matrix * (1 - smoothing_rate) + 0.5 * smoothing_rate
     # [B, F, T], [B, F, T], [B, F, T] -> ()
-    accessible_loss = tf.losses.sigmoid_cross_entropy(accessible_matrix, accessible_scores, weights=attention_mask)
+    accessible_loss = tf.losses.sigmoid_cross_entropy(accessible_matrix, accessible_scores, weights=attention_mask,
+                                                      label_smoothing=smoothing_rate)
 
     # Compute accuracy
     # [B, F, T] -> [B, F, T]
@@ -805,7 +811,8 @@ def graph_transformer_model(input_tensor,
                       acc_mask_dropout_prob=0.1,
                       initializer_range=0.02,
                       do_return_all_layers=False,
-                      supervision='mask'):
+                      supervision='mask',
+                      smoothing_rate=0):
   """Multi-headed, multi-layer Transformer from "Attention is All You Need".
 
   This is almost an exact implementation of the original Transformer encoder.
@@ -898,7 +905,8 @@ def graph_transformer_model(input_tensor,
               batch_size=batch_size,
               from_seq_length=seq_length,
               to_seq_length=seq_length,
-              supervision=supervision)
+              supervision=supervision,
+              smoothing_rate=smoothing_rate)
           attention_heads.append(attention_head)
           for field in outputs:
             accessible_outputs[field].append(outputs[field])

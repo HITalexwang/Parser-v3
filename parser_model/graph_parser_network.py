@@ -129,7 +129,8 @@ class GraphParserNetwork(BaseNetwork):
                                                       acc_mask_dropout_prob=self.acc_mask_dropout_prob,
                                                       max_position_embeddings=self.max_position_embeddings,
                                                       initializer_range=0.02,
-                                                      supervision=self.supervision)
+                                                      supervision=self.supervision,
+                                                      smoothing_rate=self.smoothing_rate)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
@@ -214,3 +215,6 @@ class GraphParserNetwork(BaseNetwork):
   @property
   def supervision(self):
     return self._config.getstr(self, 'supervision')
+  @property
+  def smoothing_rate(self):
+    return self._config.getfloat(self, 'smoothing_rate')
