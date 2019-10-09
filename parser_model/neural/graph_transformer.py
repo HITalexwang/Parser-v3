@@ -709,7 +709,7 @@ def attention_layer(from_tensor,
 
     # `accessible_mask` is applied as a universal mask to all the attention_prob matrices
     # shape = [B, N, F, T]
-    attention_scores = expanded_acc_mask * attention_scores
+    #attention_scores = expanded_acc_mask * attention_scores
 
     # accessible_matrix = accessible_matrix * (1 - smoothing_rate) + 0.5 * smoothing_rate
     # [B, F, T], [B, F, T], [B, F, T] -> ()
@@ -750,6 +750,8 @@ def attention_layer(from_tensor,
   # Normalize the attention scores to probabilities.
   # `attention_probs` = [B, N, F, T]
   attention_probs = tf.nn.softmax(attention_scores)
+  if supervision == 'mask':
+    attention_probs = expanded_acc_mask * attention_probs
 
   if supervision == 'direct':
     # make the sum of each row be 1
