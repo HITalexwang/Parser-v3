@@ -535,6 +535,12 @@ class GraphIndexVocab(IndexVocab):
   @property
   def acc_loadpath(self):
     return self._config.getstr(self, 'acc_loadpath')
+  @property
+  def top_full_connect(self):
+    return self._config.getboolean(self, 'top_full_connect')
+  @property
+  def symmetrize_adj_first(self):
+    return self._config.getboolean(self, 'symmetrize_adj_first')
 
 
 #***************************************************************

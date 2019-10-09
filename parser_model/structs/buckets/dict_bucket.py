@@ -36,7 +36,8 @@ class DictBucket(BaseBucket):
   
   #=============================================================
   def __init__(self, idx, depth, max_acc_depth=0, transpose_adjacency=True, config=None,
-                save_as_pickle=True, acc_loadname=None):
+                save_as_pickle=True, acc_loadname=None, top_full_connect=True,
+                symmetrize_adj_first=True):
     """"""
     
     super(DictBucket, self).__init__(idx, config=config)
@@ -49,6 +50,8 @@ class DictBucket(BaseBucket):
     self._transpose_adjacency = transpose_adjacency
     self._save_as_pickle = save_as_pickle
     self._acc_loadname = acc_loadname
+    self._top_full_connect = top_full_connect
+    self._symmetrize_adj_first = symmetrize_adj_first
     
     return
   
@@ -135,10 +138,11 @@ class DictBucket(BaseBucket):
   def floyd(self, matrix):
     # Calculate the minimum distance between nodes in graph
 
+    self.d_disconnect = 10000
     # matrix[b][i][j] == 1 means wj is wi's head, thus their distance is 1
     shape = matrix.shape
     seq_len = shape[1]
-    dist_matrix = matrix + (1 - matrix) * 10000
+    dist_matrix = matrix + (1 - matrix) * self.d_disconnect
     for b in range(shape[0]):
       for k in range(seq_len):
         for i in range(seq_len):
@@ -162,14 +166,30 @@ class DictBucket(BaseBucket):
     ones = np.ones(matrix.shape)
     zeros = np.zeros(matrix.shape)
     adjacency = matrix
-    if transpose:
+    if transpose and self.symmetrize_adj_first:
       adjacency = adjacency + np.transpose(adjacency, [0,2,1])
     dist_matrix = self.floyd(adjacency)
+
+    diag_ones = np.diag(np.ones(matrix.shape[1])).astype(int)
     # force the entries in diagonal to be 0, thus self loop distance is 0
-    dist_matrix = dist_matrix * (1 - np.diag(np.ones(matrix.shape[1])).astype(int))
+    if transpose and self.symmetrize_adj_first:
+      dist_matrix = dist_matrix * (1 - diag_ones)
     #print ('dist_matrix:\n', dist_matrix)
-    for d in range(max_acc_depth):
-      acc_matrices.append(np.where(dist_matrix <= d+1, ones, zeros))
+    for d in range(1, max_acc_depth):
+      acc_matrix = np.where(dist_matrix <= d, ones, zeros)
+      if transpose and not self.symmetrize_adj_first:
+        acc_matrix = (acc_matrix + np.transpose(acc_matrix, [0,2,1]))*(1 - diag_ones)+diag_ones
+      acc_matrices.append(acc_matrix)
+    if self.top_full_connect:
+      acc_matrix = np.where(dist_matrix < self.d_disconnect, ones, zeros)
+      if transpose and not self.symmetrize_adj_first:
+        acc_matrix = (acc_matrix + np.transpose(acc_matrix, [0,2,1]))*(1 - diag_ones)+diag_ones
+      acc_matrices.append(acc_matrix)
+    else:
+      acc_matrix = np.where(dist_matrix <= max_acc_depth, ones, zeros)
+      if transpose and not self.symmetrize_adj_first:
+        acc_matrix = (acc_matrix + np.transpose(acc_matrix, [0,2,1]))*(1 - diag_ones)+diag_ones
+      acc_matrices.append(acc_matrix)
     return acc_matrices
 
   #=============================================================
@@ -218,3 +238,9 @@ class DictBucket(BaseBucket):
   @property
   def acc_matrices(self):
     return self._acc_matrices
+  @property
+  def top_full_connect(self):
+    return self._top_full_connect
+  @property
+  def symmetrize_adj_first(self):
+    return self._symmetrize_adj_first

@@ -42,7 +42,9 @@ class DictMultibucket(BaseMultibucket, dict):
         self[vocab.classname] = [DictBucket(idx, vocab.depth, max_acc_depth=vocab.max_accessible_depth,
                                   transpose_adjacency=vocab.transpose_adjacency, config=config,
                                   save_as_pickle=vocab.save_as_pickle, acc_loadname=os.path.join(
-                                    vocab.acc_loadpath, setname+'-acc_bkt-'+str(idx)+'.pkl')) for idx in six.moves.range(max_buckets)]
+                                    vocab.acc_loadpath, setname+'-acc_bkt-'+str(idx)+'.pkl'),
+                                  top_full_connect=vocab.top_full_connect,
+                                  symmetrize_adj_first=vocab.symmetrize_adj_first) for idx in six.moves.range(max_buckets)]
       else:
         self[vocab.classname] = [DictBucket(idx, vocab.depth, config=config) for idx in six.moves.range(max_buckets)]
     
