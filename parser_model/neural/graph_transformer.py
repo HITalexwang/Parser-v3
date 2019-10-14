@@ -79,7 +79,7 @@ class GraphTransformerConfig(object):
     self.initializer_range = initializer_range
     self.supervision = supervision
     self.smoothing_rate = smoothing_rate
-    assert supervision in ['direct', 'mask', 'none']
+    assert supervision in ['direct', 'mask', 'none', 'graph']
 
   @classmethod
   def from_dict(cls, json_object):
@@ -163,7 +163,9 @@ class GraphTransformer(object):
     if input_mask is None:
       input_mask = tf.ones(shape=[batch_size, seq_length], dtype=tf.int32)
     if accessible_matrices is not None:
-      if len(accessible_matrices) != config.num_hidden_layers:
+      if config.supervision == 'graph':
+        assert isinstance(accessible_matrices, tf.Tensor)
+      elif len(accessible_matrices) != config.num_hidden_layers:
         raise ValueError(
           "The number of accessible matrices does not match the number of attention layers.")
     elif config.supervision != 'none':
@@ -674,51 +676,92 @@ def attention_layer(from_tensor,
 
   outputs = {}
   # Accessible Mask
-  if supervision == 'mask':
+  if supervision == 'mask' or supervision == 'graph':
+    # calculate mask for the forward direction (root-to-leave)
     # shape = [B*F, H]
-    accessible_query = tf.layers.dense(
+    accessible_query_f = tf.layers.dense(
         from_tensor_2d,
         size_per_head,
         activation=query_act,
-        name="accessible_query",
+        name="accessible_query_f",
         kernel_initializer=create_initializer(initializer_range))
 
     # shape = [B*T, H]
-    accessible_key = tf.layers.dense(
+    accessible_key_f = tf.layers.dense(
         to_tensor_2d,
         size_per_head,
         activation=key_act,
-        name="accessible_key",
+        name="accessible_key_f",
         kernel_initializer=create_initializer(initializer_range))
 
     # shape = [B, F, H]
-    accessible_query = tf.reshape(accessible_query, [batch_size, from_seq_length, size_per_head])
+    accessible_query_f = tf.reshape(accessible_query_f, [batch_size, from_seq_length, size_per_head])
 
     # shape = [B, T, H]
-    accessible_key = tf.reshape(accessible_key, [batch_size, to_seq_length, size_per_head])
+    accessible_key_f = tf.reshape(accessible_key_f, [batch_size, to_seq_length, size_per_head])
 
     # shape = [B, F, T]
-    accessible_scores = tf.matmul(accessible_query, accessible_key, transpose_b=True)
-    accessible_scores = tf.multiply(accessible_scores,
+    accessible_scores_f = tf.matmul(accessible_query_f, accessible_key_f, transpose_b=True)
+    accessible_scores_f = tf.multiply(accessible_scores_f,
                                    1.0 / math.sqrt(float(size_per_head)))
     # shape = [B, F, T]
-    accessible_mask = tf.nn.sigmoid(accessible_scores)
+    accessible_mask_f = tf.nn.sigmoid(accessible_scores_f)
+
+    # calculate mask for the backward direction (leave-to-root)
+    # shape = [B*F, H]
+    accessible_query_b = tf.layers.dense(
+        from_tensor_2d,
+        size_per_head,
+        activation=query_act,
+        name="accessible_query_b",
+        kernel_initializer=create_initializer(initializer_range))
+
+    # shape = [B*T, H]
+    accessible_key_b = tf.layers.dense(
+        to_tensor_2d,
+        size_per_head,
+        activation=key_act,
+        name="accessible_key_b",
+        kernel_initializer=create_initializer(initializer_range))
+
+    # shape = [B, F, H]
+    accessible_query_b = tf.reshape(accessible_query_b, [batch_size, from_seq_length, size_per_head])
+
+    # shape = [B, T, H]
+    accessible_key_b = tf.reshape(accessible_key_b, [batch_size, to_seq_length, size_per_head])
+
+    # shape = [B, F, T]
+    accessible_scores_b = tf.matmul(accessible_query_b, accessible_key_b, transpose_b=True)
+    accessible_scores_b = tf.multiply(accessible_scores_b,
+                                   1.0 / math.sqrt(float(size_per_head)))
+    # shape = [B, F, T]
+    accessible_mask_b = tf.nn.sigmoid(accessible_scores_b)
+
+    # the forward/backward mask are applied to first/second head probs
+    # mask for other heads are all 1
     # shape = [B, N, F, T]
-    expanded_acc_mask = tf.stack([accessible_mask for i in range(num_attention_heads)], axis=1)
+    expanded_acc_mask = tf.stack([accessible_mask_f, accessible_mask_b]+
+                        [tf.ones_like(accessible_mask_f) for i in range(num_attention_heads-2)], axis=1)
+    
     expanded_acc_mask = dropout(expanded_acc_mask, acc_mask_dropout_prob)
 
-    # `accessible_mask` is applied as a universal mask to all the attention_prob matrices
+    # `accessible_mask_f` is applied as a universal mask to all the attention_prob matrices
     # shape = [B, N, F, T]
-    #attention_scores = expanded_acc_mask * attention_scores
+    #attention_scores = expanded_acc_mask_f * attention_scores
 
     # accessible_matrix = accessible_matrix * (1 - smoothing_rate) + 0.5 * smoothing_rate
     # [B, F, T], [B, F, T], [B, F, T] -> ()
-    accessible_loss = tf.losses.sigmoid_cross_entropy(accessible_matrix, accessible_scores, weights=attention_mask,
+    accessible_loss_f = tf.losses.sigmoid_cross_entropy(accessible_matrix, accessible_scores_f, weights=attention_mask,
                                                       label_smoothing=smoothing_rate)
+    # here the adjacency graph is transposed to get the semmetry matrix, which is in reversed direction.
+    # [B, F, T], [B, F, T], [B, F, T] -> ()
+    accessible_loss_b = tf.losses.sigmoid_cross_entropy(tf.transpose(accessible_matrix, [0, 2, 1]), accessible_scores_b, weights=attention_mask,
+                                                      label_smoothing=smoothing_rate)
+    accessible_loss = accessible_loss_f + accessible_loss_b
 
     # Compute accuracy
     # [B, F, T] -> [B, F, T]
-    predictions = nn.greater(accessible_scores, 0, dtype=tf.int32) * attention_mask
+    predictions = nn.greater(accessible_scores_f, 0, dtype=tf.int32) * attention_mask
     # [B, F, T] * [B, F, T] -> [B, F, T]
     true_positives = predictions * accessible_matrix
     # [B, F, T] -> ()
@@ -750,7 +793,7 @@ def attention_layer(from_tensor,
   # Normalize the attention scores to probabilities.
   # `attention_probs` = [B, N, F, T]
   attention_probs = tf.nn.softmax(attention_scores)
-  if supervision == 'mask':
+  if supervision == 'mask' or supervision == 'graph':
     attention_probs = expanded_acc_mask * attention_probs
 
   if supervision == 'direct':
@@ -879,6 +922,9 @@ def graph_transformer_model(input_tensor,
   if supervision == 'mask':
     accessible_outputs = {'acc_loss':[], 'n_acc_true_positives':[], 'n_acc_false_positives':[],
                         'n_acc_false_negatives':[]}
+  elif supervision == 'graph':
+    accessible_outputs = {'acc_loss':[], 'n_acc_true_positives':[], 'n_acc_false_positives':[],
+                        'n_acc_false_negatives':[]}
   elif supervision == 'direct':
     accessible_outputs = {'acc_loss':[]}
   else:
@@ -893,11 +939,16 @@ def graph_transformer_model(input_tensor,
       with tf.variable_scope("attention"):
         attention_heads = []
         with tf.variable_scope("self"):
+          if supervision == 'graph':
+            # here the accessible_matrices is the graph adjacency matrix
+            acc_matrix = accessible_matrices
+          else:
+            acc_matrix = accessible_matrices[layer_idx]
           attention_head, outputs = attention_layer(
               from_tensor=layer_input,
               to_tensor=layer_input,
               attention_mask=attention_mask,
-              accessible_matrix=accessible_matrices[layer_idx],
+              accessible_matrix=acc_matrix,
               num_attention_heads=num_attention_heads,
               size_per_head=attention_head_size,
               attention_probs_dropout_prob=attention_probs_dropout_prob,
