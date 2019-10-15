@@ -130,7 +130,8 @@ class GraphParserNetwork(BaseNetwork):
                                                       max_position_embeddings=self.max_position_embeddings,
                                                       initializer_range=0.02,
                                                       supervision=self.supervision,
-                                                      smoothing_rate=self.smoothing_rate)
+                                                      smoothing_rate=self.smoothing_rate,
+                                                      acc_inters=self.acc_inters)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
@@ -150,8 +151,11 @@ class GraphParserNetwork(BaseNetwork):
       acc_outputs = None
       if self.supervision != 'none':
         acc_outputs = transformer.get_accessible_outputs()
-        for field in acc_outputs:
-          acc_outputs[field] = tf.reduce_sum(acc_outputs[field])
+        if self.supervision == 'graph':
+          acc_outputs['acc_loss'] = tf.reduce_sum(acc_outputs['acc_loss'])
+        else:
+          for field in acc_outputs:
+            acc_outputs[field] = tf.reduce_sum(acc_outputs[field])
     
     with tf.variable_scope('Classifiers'):
       if 'semrel' in output_fields:
@@ -222,3 +226,6 @@ class GraphParserNetwork(BaseNetwork):
   @property
   def smoothing_rate(self):
     return self._config.getfloat(self, 'smoothing_rate')
+  @property
+  def acc_inters(self):
+    return [float(f) for f in self._config.getlist(self, 'acc_inters')]

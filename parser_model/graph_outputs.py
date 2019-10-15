@@ -111,12 +111,21 @@ class GraphOutputs(object):
               'sequences': [0]
             }
           if 'n_acc_true_positives' in self._accuracies[field]:
-            self.history['accessible'] = {
-              'loss': [0],
-              'tokens': [0],
-              'fp_tokens': 0,
-              'fn_tokens': 0
-            }
+            if isinstance(self._accuracies[field]['n_acc_true_positives'], list):
+              n_layers = len(self._accuracies[field]['n_acc_true_positives'])
+              self.history['accessible'] = {
+                'loss': [0],
+                'tokens': [[0]*n_layers],
+                'fp_tokens': [0]*n_layers,
+                'fn_tokens': [0]*n_layers
+              } 
+            else:
+              self.history['accessible'] = {
+                'loss': [0],
+                'tokens': [0],
+                'fp_tokens': 0,
+                'fn_tokens': 0
+              }
           elif 'acc_loss' in self._accuracies[field]:
             self.history['accessible'] = {
               'loss': [0]
@@ -391,6 +400,20 @@ class GraphOutputs(object):
     precision = self.history[field]['tokens'][-1] / (self.history[field]['tokens'][-1] + self.history[field]['fp_tokens'] + 1e-12)
     recall = self.history[field]['tokens'][-1] / (self.history[field]['tokens'][-1] + self.history[field]['fn_tokens'] + 1e-12)
     return 2 * (precision * recall) / (precision + recall + 1e-12)
+
+  def compute_token_F1_PR(self, field):
+    """"""
+    
+    precision = self.history[field]['tokens'][-1] / (self.history[field]['tokens'][-1] + self.history[field]['fp_tokens'] + 1e-12)
+    recall = self.history[field]['tokens'][-1] / (self.history[field]['tokens'][-1] + self.history[field]['fn_tokens'] + 1e-12)
+    return 2 * (precision * recall) / (precision + recall + 1e-12), precision, recall
+
+  def compute_token_F1_PR_index(self, field, i):
+    """"""
+    
+    precision = self.history[field]['tokens'][-1][i] / (self.history[field]['tokens'][-1][i] + self.history[field]['fp_tokens'][i] + 1e-12)
+    recall = self.history[field]['tokens'][-1][i] / (self.history[field]['tokens'][-1][i] + self.history[field]['fn_tokens'][i] + 1e-12)
+    return 2 * (precision * recall) / (precision + recall + 1e-12), precision, recall
   
   def compute_sequence_accuracy(self, field):
     """"""
@@ -460,10 +483,17 @@ class GraphOutputs(object):
         self.history['semgraph']['sequences'][-1] += output['n_correct_sequences']
         if 'accessible' in self.history:
           self.history['accessible']['loss'][-1] += output['acc_loss']
-          if 'tokens' in self.history['accessible']:
-            self.history['accessible']['tokens'][-1] += output['n_acc_true_positives']
-            self.history['accessible']['fp_tokens'] += output['n_acc_false_positives']
-            self.history['accessible']['fn_tokens'] += output['n_acc_false_negatives']
+          if 'fp_tokens' in self.history['accessible']:
+            if isinstance(self.history['accessible']['fp_tokens'], list):
+              for i in range(len(self.history['accessible']['fp_tokens'])):
+                self.history['accessible']['tokens'][-1][i] += output['n_acc_true_positives'][i]
+                self.history['accessible']['fp_tokens'][i] += output['n_acc_false_positives'][i]
+                self.history['accessible']['fn_tokens'][i] += output['n_acc_false_negatives'][i]
+              #print (self.history['accessible']['fp_tokens'], self.history['accessible']['fn_tokens'])
+            else:
+              self.history['accessible']['tokens'][-1] += output['n_acc_true_positives']
+              self.history['accessible']['fp_tokens'] += output['n_acc_false_positives']
+              self.history['accessible']['fn_tokens'] += output['n_acc_false_negatives']
       elif field == 'deptree':
         if self._factored_deptree:
           self.history['deprel']['loss'][-1] += output['label_loss']
@@ -548,15 +578,35 @@ class GraphOutputs(object):
       self.history[field]['loss'].append(0)
       print('{:5}'.format('ACC'), end='')
       print(' | ', end='')
-      print('Loss: {:.2e}'.format(loss), end='')
+      print('Loss: {:.2e}\n'.format(loss), end='')
       if 'tokens' in self.history[field]:
-        self.history[field]['tokens'][-1] = self.compute_token_F1(field) * 100
-        acc = self.history[field]['tokens'][-1]
-        print(' | ', end='')
-        print('Acc: {:5.2f}\n'.format(acc), end='')
-        self.history[field]['tokens'].append(0)
-        self.history[field]['fp_tokens'] = 0
-        self.history[field]['fn_tokens'] = 0
+        if isinstance(self.history[field]['fp_tokens'], list):
+          n_layers = len(self.history[field]['fp_tokens'])
+          for i in range(n_layers):
+            self.history[field]['tokens'][-1][i], precision, recall = [v*100 for v in self.compute_token_F1_PR_index(field, i)]
+            acc = self.history[field]['tokens'][-1][i]
+            print('{:5}'.format('L-'+str(i)), end='')
+            print(' | ', end='')
+            print('F1: {:5.2f}'.format(acc), end='')
+            print(' | ', end='')
+            print('P: {:5.2f}'.format(precision), end='')
+            print(' | ', end='')
+            print('R: {:5.2f}\n'.format(recall), end='')
+          self.history[field]['tokens'].append([0]*n_layers)
+          self.history[field]['fp_tokens'] = [0]*n_layers
+          self.history[field]['fn_tokens'] = [0]*n_layers
+        else:
+          self.history[field]['tokens'][-1], precision, recall = [v*100 for v in self.compute_token_F1_PR(field)]
+          acc = self.history[field]['tokens'][-1]
+          print(' | ', end='')
+          print('F1: {:5.2f}'.format(acc), end='')
+          print(' | ', end='')
+          print('P: {:5.2f}'.format(precision), end='')
+          print(' | ', end='')
+          print('R: {:5.2f}\n'.format(recall), end='')
+          self.history[field]['tokens'].append(0)
+          self.history[field]['fp_tokens'] = 0
+          self.history[field]['fn_tokens'] = 0
       else:
         print ('\n', end='')
     

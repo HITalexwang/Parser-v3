@@ -44,7 +44,8 @@ class GraphTransformerConfig(object):
                max_position_embeddings=512,
                initializer_range=0.02,
                supervision='mask',
-               smoothing_rate=0):
+               smoothing_rate=0,
+               acc_inters=None):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -79,7 +80,11 @@ class GraphTransformerConfig(object):
     self.initializer_range = initializer_range
     self.supervision = supervision
     self.smoothing_rate = smoothing_rate
+    self.acc_inters = acc_inters
     assert supervision in ['direct', 'mask', 'none', 'graph']
+    if supervision != 'none':
+      assert acc_inters is not None
+      assert len(acc_inters) == num_hidden_layers
 
   @classmethod
   def from_dict(cls, json_object):
@@ -218,7 +223,8 @@ class GraphTransformer(object):
             initializer_range=config.initializer_range,
             do_return_all_layers=True,
             supervision=config.supervision,
-            smoothing_rate=config.smoothing_rate)
+            smoothing_rate=config.smoothing_rate,
+            acc_inters=config.acc_inters)
 
       self.sequence_output = self.all_encoder_layers[-1]
 
@@ -536,7 +542,8 @@ def attention_layer(from_tensor,
                     from_seq_length=None,
                     to_seq_length=None,
                     supervision='mask',
-                    smoothing_rate=0):
+                    smoothing_rate=0,
+                    acc_inter=.5):
   """Performs multi-headed attention from `from_tensor` to `to_tensor`.
 
   This is an implementation of multi-headed attention based on "Attention
@@ -586,6 +593,7 @@ def attention_layer(from_tensor,
     to_seq_length: (Optional) If the input is 2D, this might be the seq length
       of the 3D version of the `to_tensor`.
     supervision: supervision type (i.e. `direct` or `mask`)
+    acc_inter: interpulation between fn_loss and fp_loss
 
   Returns:
     float Tensor of shape [batch_size, from_seq_length,
@@ -750,13 +758,45 @@ def attention_layer(from_tensor,
     #attention_scores = expanded_acc_mask_f * attention_scores
 
     # accessible_matrix = accessible_matrix * (1 - smoothing_rate) + 0.5 * smoothing_rate
+    gold_matrix = accessible_matrix
+    mask_matrix = gold_matrix
+    # penalize false negative predictions (gold is 1, predict 0)
+    acc_loss_f_fn = tf.losses.sigmoid_cross_entropy(gold_matrix*mask_matrix, 
+                                                    accessible_scores_f*tf.to_float(mask_matrix), 
+                                                    weights=attention_mask,
+                                                    label_smoothing=smoothing_rate)
+    mask_matrix = 1 - mask_matrix
+    # penalize false positive predictions (gold is 0, predict 1)
+    acc_loss_f_fp = tf.losses.sigmoid_cross_entropy(gold_matrix*mask_matrix, 
+                                                    accessible_scores_f*tf.to_float(mask_matrix), 
+                                                    weights=attention_mask,
+                                                    label_smoothing=smoothing_rate)
     # [B, F, T], [B, F, T], [B, F, T] -> ()
-    accessible_loss_f = tf.losses.sigmoid_cross_entropy(accessible_matrix, accessible_scores_f, weights=attention_mask,
-                                                      label_smoothing=smoothing_rate)
+    #accessible_loss_f = tf.losses.sigmoid_cross_entropy(accessible_matrix, accessible_scores_f, weights=attention_mask,
+    #                                                  label_smoothing=smoothing_rate)
+    # the bigger acc_inter is, the less arcs will be predicted
+    # (model tends to predict simpler arcs)
+    accessible_loss_f = (1 - acc_inter) * acc_loss_f_fn + acc_inter * acc_loss_f_fp
+    
     # here the adjacency graph is transposed to get the semmetry matrix, which is in reversed direction.
+    gold_matrix = tf.transpose(accessible_matrix, [0, 2, 1])
+    mask_matrix = gold_matrix
+    # penalize false negative predictions (gold is 1, predict 0)
+    acc_loss_b_fn = tf.losses.sigmoid_cross_entropy(gold_matrix*mask_matrix, 
+                                                    accessible_scores_b*tf.to_float(mask_matrix), 
+                                                    weights=attention_mask,
+                                                    label_smoothing=smoothing_rate)
+    mask_matrix = 1 - mask_matrix
+    # penalize false positive predictions (gold is 0, predict 1)
+    acc_loss_b_fp = tf.losses.sigmoid_cross_entropy(gold_matrix*mask_matrix, 
+                                                    accessible_scores_b*tf.to_float(mask_matrix), 
+                                                    weights=attention_mask,
+                                                    label_smoothing=smoothing_rate)
     # [B, F, T], [B, F, T], [B, F, T] -> ()
-    accessible_loss_b = tf.losses.sigmoid_cross_entropy(tf.transpose(accessible_matrix, [0, 2, 1]), accessible_scores_b, weights=attention_mask,
-                                                      label_smoothing=smoothing_rate)
+    #accessible_loss_b = tf.losses.sigmoid_cross_entropy(gold_matrix, accessible_scores_b, weights=attention_mask,
+    #                                                  label_smoothing=smoothing_rate)
+    accessible_loss_b = (1 - acc_inter) * acc_loss_b_fn + acc_inter * acc_loss_b_fp
+
     accessible_loss = accessible_loss_f + accessible_loss_b
 
     # Compute accuracy
@@ -857,7 +897,8 @@ def graph_transformer_model(input_tensor,
                       initializer_range=0.02,
                       do_return_all_layers=False,
                       supervision='mask',
-                      smoothing_rate=0):
+                      smoothing_rate=0,
+                      acc_inters=None):
   """Multi-headed, multi-layer Transformer from "Attention is All You Need".
 
   This is almost an exact implementation of the original Transformer encoder.
@@ -918,6 +959,10 @@ def graph_transformer_model(input_tensor,
   # help the optimizer.
   prev_output = reshape_to_matrix(input_tensor)
 
+  if supervision != 'none':
+    assert acc_inters is not None
+    assert len(acc_inters) == num_hidden_layers
+
   all_layer_outputs = []
   if supervision == 'mask':
     accessible_outputs = {'acc_loss':[], 'n_acc_true_positives':[], 'n_acc_false_positives':[],
@@ -959,7 +1004,8 @@ def graph_transformer_model(input_tensor,
               from_seq_length=seq_length,
               to_seq_length=seq_length,
               supervision=supervision,
-              smoothing_rate=smoothing_rate)
+              smoothing_rate=smoothing_rate,
+              acc_inter=acc_inters[layer_idx])
           attention_heads.append(attention_head)
           for field in outputs:
             accessible_outputs[field].append(outputs[field])
