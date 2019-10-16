@@ -118,7 +118,28 @@ class GraphParserNetwork(BaseNetwork):
     #                                       highway=self.highway,
     #                                       highway_func=self.highway_func,
     #                                       bilin=self.bilin)
-    
+
+    if self.n_std_layers > 0:
+      config_std = graph_transformer.GraphTransformerConfig(hidden_size=self.hidden_size,
+                                                        num_hidden_layers=self.n_std_layers,
+                                                        num_attention_heads=self.n_attention_heads,
+                                                        intermediate_size=self.intermediate_size,
+                                                        hidden_act="gelu",
+                                                        hidden_dropout_prob=self.hidden_dropout_prob,
+                                                        attention_probs_dropout_prob=self.attention_probs_dropout_prob,
+                                                        max_position_embeddings=self.max_position_embeddings,
+                                                        initializer_range=0.02,
+                                                        supervision='none')
+
+      with tf.variable_scope('Transformer-std'):
+        # shape = [batch_size, seq_len, seq_len]
+        input_mask_3D = tf.expand_dims(root_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
+        transformer = graph_transformer.GraphTransformer(config_std, not reuse, layer, 
+                                                          input_mask=input_mask_3D,
+                                                          accessible_matrices=None)
+        # shape = [batch_size, seq_len, hidden_size]
+        layer = transformer.get_sequence_output()
+
     config = graph_transformer.GraphTransformerConfig(hidden_size=self.hidden_size,
                                                       num_hidden_layers=self.n_layers,
                                                       num_attention_heads=self.n_attention_heads,
@@ -229,3 +250,6 @@ class GraphParserNetwork(BaseNetwork):
   @property
   def acc_inters(self):
     return [float(f) for f in self._config.getlist(self, 'acc_inters')]
+  @property
+  def n_std_layers(self):
+    return self._config.getint(self, 'n_std_layers')

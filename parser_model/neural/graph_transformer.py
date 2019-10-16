@@ -612,7 +612,7 @@ def attention_layer(from_tensor,
 
     output_tensor = tf.transpose(output_tensor, [0, 2, 1, 3])
     return output_tensor
-
+  
   from_shape = get_shape_list(from_tensor, expected_rank=[2, 3])
   to_shape = get_shape_list(to_tensor, expected_rank=[2, 3])
 
@@ -1001,6 +1001,10 @@ def graph_transformer_model(input_tensor,
             acc_matrix = accessible_matrices
           else:
             acc_matrix = accessible_matrices[layer_idx]
+          if supervision == 'none':
+            acc_inter = None
+          else:
+            acc_inter = acc_inters[layer_idx]
           attention_head, outputs = attention_layer(
               from_tensor=layer_input,
               to_tensor=layer_input,
@@ -1017,7 +1021,7 @@ def graph_transformer_model(input_tensor,
               to_seq_length=seq_length,
               supervision=supervision,
               smoothing_rate=smoothing_rate,
-              acc_inter=acc_inters[layer_idx])
+              acc_inter=acc_inter)
           attention_heads.append(attention_head)
           for field in outputs:
             accessible_outputs[field].append(outputs[field])
