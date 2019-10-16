@@ -536,7 +536,7 @@ class GraphOutputs(object):
         tokens = self.history[field]['tokens'][-1]
         if field in ('semgraph', 'semhead'):
           tp = self.history[field]['tokens'][-1]
-          self.history[field]['tokens'][-1] = self.compute_token_F1(field) * 100
+          self.history[field]['tokens'][-1], precision, recall = [v*100 for v in self.compute_token_F1_PR(field)]
         elif field == 'semrel':
           n_edges = self.history[field]['n_edges']
           self.history[field]['tokens'][-1] *= 100 / n_edges
@@ -565,6 +565,14 @@ class GraphOutputs(object):
           print('Acc: {:5.2f}'.format(acc), end='')
           print(' | ', end='')
           print('Seq: {:5.2f}\n'.format(acc_seq), end='')
+        if field in ('semgraph', 'semhead'):
+          print('{:5}'.format(string), end='')
+          print(' | ', end='')
+          print('F1: {:5.2f}'.format(acc), end='')
+          print(' | ', end='')
+          print('P: {:5.2f}'.format(precision), end='')
+          print(' | ', end='')
+          print('R: {:5.2f}\n'.format(recall), end='')
         for key, value in six.iteritems(self.history[field]):
           if hasattr(value, 'append'):
             value.append(0)
