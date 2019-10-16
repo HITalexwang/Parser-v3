@@ -139,7 +139,7 @@ class GraphParserNetwork(BaseNetwork):
     with tf.variable_scope('Transformer'):
       # shape = [batch_size, seq_len, seq_len]
       input_mask_3D = tf.expand_dims(root_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
-      if self.supervision == 'graph':
+      if self.supervision.startswith('graph'):
         acc_matrices = output_fields['semhead'].placeholder
       else:
         acc_matrices = output_fields['semhead'].accessible_placeholders
@@ -151,7 +151,7 @@ class GraphParserNetwork(BaseNetwork):
       acc_outputs = None
       if self.supervision != 'none':
         acc_outputs = transformer.get_accessible_outputs()
-        if self.supervision == 'graph':
+        if self.supervision.startswith('graph'):
           acc_outputs['acc_loss'] = tf.reduce_sum(acc_outputs['acc_loss'])
         else:
           for field in acc_outputs:
