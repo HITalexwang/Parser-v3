@@ -140,6 +140,8 @@ class GraphParserNetwork(BaseNetwork):
         # shape = [batch_size, seq_len, hidden_size]
         layer = transformer.get_sequence_output()
 
+    acc_inters = None if self.supervision == 'none' else self.acc_inters
+
     config = graph_transformer.GraphTransformerConfig(hidden_size=self.hidden_size,
                                                       num_hidden_layers=self.n_layers,
                                                       num_attention_heads=self.n_attention_heads,
@@ -152,7 +154,7 @@ class GraphParserNetwork(BaseNetwork):
                                                       initializer_range=0.02,
                                                       supervision=self.supervision,
                                                       smoothing_rate=self.smoothing_rate,
-                                                      acc_inters=self.acc_inters)
+                                                      acc_inters=acc_inters)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
