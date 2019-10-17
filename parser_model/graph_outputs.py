@@ -271,19 +271,22 @@ class GraphOutputs(object):
           n_layers: the layers which are used to augment the output graph
     """
     output_preds = semhead_preds
-    n_addeds = []
+    #n_addeds = []
+    aug_preds = np.ones_like(semhead_preds)
     #print ('orig:\n',output_preds)
     for n in n_layers:
       probs = acc_probs[n]
       # (n x m x m) -> (n x m x m)
       preds = np.where(probs >= .5, 1, 0)
       #print ('layer-{}:\n'.format(n),preds)
-      overlapped = preds * output_preds
-      n_added = np.sum(preds - overlapped)
-      n_addeds.append(n_added)
-      print ("## Added {} arcs from layer-{}.".format(n_added, n))
-      output_preds = output_preds + preds - overlapped
-    print ('## Added {} arcs in total.'.format(sum(n_addeds)))
+      aug_preds = aug_preds * preds
+    #print ('aug_preds:\n',aug_preds)
+    overlapped = aug_preds * output_preds
+    n_added = np.sum(aug_preds - overlapped)
+    #n_addeds.append(n_added)
+    #print ("## Added {} arcs from layer-{}.".format(n_added, n))
+    output_preds = output_preds + aug_preds - overlapped
+    print ('## Added {} arcs in total.'.format(n_added))
     return output_preds
   
   def sem16decoder(self, semgraph_probs, lengths):
