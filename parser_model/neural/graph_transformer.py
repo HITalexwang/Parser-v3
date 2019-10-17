@@ -160,6 +160,7 @@ class GraphTransformer(object):
     if not is_training:
       config.hidden_dropout_prob = 0.0
       config.attention_probs_dropout_prob = 0.0
+      config.acc_mask_dropout_prob = 0.0
 
     input_shape = get_shape_list(input_tensor, expected_rank=3)
     batch_size = input_shape[0]
@@ -612,7 +613,7 @@ def attention_layer(from_tensor,
 
     output_tensor = tf.transpose(output_tensor, [0, 2, 1, 3])
     return output_tensor
-  
+
   from_shape = get_shape_list(from_tensor, expected_rank=[2, 3])
   to_shape = get_shape_list(to_tensor, expected_rank=[2, 3])
 
@@ -812,6 +813,8 @@ def attention_layer(from_tensor,
     
 
     # Compute accuracy
+    probabilities = accessible_mask_f * tf.to_float(attention_mask)
+
     # [B, F, T] -> [B, F, T]
     predictions = nn.greater(accessible_scores_f, 0, dtype=tf.int32) * attention_mask
     # [B, F, T] * [B, F, T] -> [B, F, T]
@@ -828,6 +831,7 @@ def attention_layer(from_tensor,
     outputs['n_acc_true_positives'] = n_true_positives
     outputs['n_acc_false_positives'] = n_false_positives
     outputs['n_acc_false_negatives'] = n_false_negatives
+    outputs['probabilities'] = probabilities
 
   if attention_mask is not None:
     # `attention_mask` = [B, 1, F, T]
@@ -978,10 +982,10 @@ def graph_transformer_model(input_tensor,
   all_layer_outputs = []
   if supervision.startswith('mask'):
     accessible_outputs = {'acc_loss':[], 'n_acc_true_positives':[], 'n_acc_false_positives':[],
-                        'n_acc_false_negatives':[]}
+                        'n_acc_false_negatives':[], 'probabilities':[]}
   elif supervision.startswith('graph'):
     accessible_outputs = {'acc_loss':[], 'n_acc_true_positives':[], 'n_acc_false_positives':[],
-                        'n_acc_false_negatives':[]}
+                        'n_acc_false_negatives':[], 'probabilities':[]}
   elif supervision == 'direct':
     accessible_outputs = {'acc_loss':[]}
   else:

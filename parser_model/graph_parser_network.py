@@ -178,6 +178,7 @@ class GraphParserNetwork(BaseNetwork):
           acc_outputs['acc_loss'] = tf.reduce_sum(acc_outputs['acc_loss'])
         else:
           for field in acc_outputs:
+            if field == 'probabilities': continue
             acc_outputs[field] = tf.reduce_sum(acc_outputs[field])
     
     with tf.variable_scope('Classifiers'):
@@ -203,7 +204,10 @@ class GraphParserNetwork(BaseNetwork):
         if acc_outputs is not None:
           outputs['semgraph']['loss'] += acc_outputs['acc_loss']
           for field in acc_outputs:
-            outputs['semgraph'][field] = acc_outputs[field]
+            if field == 'probabilities':
+              outputs['acc'] = {field : acc_outputs[field]}
+            else:
+              outputs['semgraph'][field] = acc_outputs[field]
         self._evals.add('semgraph')
       elif 'semhead' in output_fields:
         vocab = output_fields['semhead']

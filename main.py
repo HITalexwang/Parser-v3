@@ -91,6 +91,7 @@ def main():
   run_parser.add_argument('--output_filename')
   run_parser.add_argument('--other_save_dirs')
   run_parser.add_argument('--elmo_test_filename')
+  run_parser.add_argument('--augment_layers')
   for section_name in section_names:
     run_parser.add_argument('--'+section_name, nargs='+')
     
@@ -171,6 +172,7 @@ def run(**kwargs):
   output_dir = kwargs.pop('output_dir')
   output_filename = kwargs.pop('output_filename')
   elmo_test_filename = kwargs.pop('elmo_test_filename')
+  augment_layers = kwargs.pop('augment_layers')
 
   # Get the cl-defined options
   kwargs = {key: value for key, value in six.iteritems(kwargs) if value is not None}
@@ -194,13 +196,18 @@ def run(**kwargs):
     kwargs['FormElmoVocab'] = {}
     kwargs['FormElmoVocab']['elmo_test_filename'] = elmo_test_filename
 
+  if augment_layers:
+    augment_layers = [int(n) for n in augment_layers.split(',')]
+  else:
+    augment_layers = None
+
   config = Config(defaults_file='', config_file=config_file, **kwargs)
   network_class = config.get('DEFAULT', 'network_class')
   network_list = config.get(network_class, 'input_network_classes')
   input_networks, networks = resolve_network_dependencies(config, network_class, network_list, {})
   NetworkClass = getattr(parser_model, network_class)
   network = NetworkClass(input_networks=input_networks, config=config)
-  network.parse(conllu_files, output_dir=output_dir, output_filename=output_filename)
+  network.parse(conllu_files, output_dir=output_dir, output_filename=output_filename, augment_layers=augment_layers)
   return
 
 #***************************************************************

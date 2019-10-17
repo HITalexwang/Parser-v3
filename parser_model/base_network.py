@@ -320,7 +320,7 @@ class BaseNetwork(object):
     return
 
   #=============================================================
-  def parse(self, conllu_files, output_dir=None, output_filename=None):
+  def parse(self, conllu_files, output_dir=None, output_filename=None, augment_layers=None):
     """"""
 
     with Timer('Building dataset'):
@@ -363,7 +363,8 @@ class BaseNetwork(object):
       if len(conllu_files) == 1 or output_filename is not None:
         with Timer('Parsing file'):
           if not self.other_save_dirs:
-            self.parse_file(parseset, parse_outputs, sess, output_dir=output_dir, output_filename=output_filename)
+            self.parse_file(parseset, parse_outputs, sess, output_dir=output_dir, 
+                            output_filename=output_filename, augment_layers=augment_layers)
           else:
             self.parse_file_ensemble(parseset, parse_outputs, sess, saver, output_dir=output_dir, output_filename=output_filename)
       else:
@@ -372,7 +373,8 @@ class BaseNetwork(object):
     return
 
   #=============================================================
-  def parse_file(self, dataset, graph_outputs, sess, output_dir=None, output_filename=None, print_time=True):
+  def parse_file(self, dataset, graph_outputs, sess, output_dir=None, output_filename=None,
+                  print_time=True, augment_layers=None):
     """"""
 
     probability_tensors = graph_outputs.probabilities
@@ -383,7 +385,7 @@ class BaseNetwork(object):
         tokens, lengths = dataset.get_tokens(indices)
         feed_dict = dataset.set_placeholders(indices)
         probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
-        predictions = graph_outputs.probs_to_preds(probabilities, lengths)
+        predictions = graph_outputs.probs_to_preds(probabilities, lengths, augment_layers=augment_layers)
         tokens.update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
         graph_outputs.cache_predictions(tokens, indices)
 

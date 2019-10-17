@@ -64,19 +64,25 @@ class GraphOutputs(object):
     self._evals = evals or list(outputs.keys())
     #self._evals = config.getlist(self, 'evals')
     valid_evals = set([print_map[0] for print_map in self._print_mapping])
-    
-    for eval_ in list(self._evals):
-      assert eval_ in valid_evals
-    self._loss = tf.add_n([tf.where(tf.is_finite(output['loss']), output['loss'], 0.) for output in outputs.values()])
     self._accuracies = {'total': tokens}
     self._probabilities = {}
     self.time = None
+    
+    # Store the predicted graph matrix at each attention layer
+    if 'acc' in outputs:
+      acc_output = outputs.pop('acc')
+      self._probabilities['acc'] = acc_output['probabilities']
+      self._evals.remove('acc')
+
+    for eval_ in list(self._evals):
+      assert eval_ in valid_evals
+    self._loss = tf.add_n([tf.where(tf.is_finite(output['loss']), output['loss'], 0.) for output in outputs.values()])
     
     #-----------------------------------------------------------
     for field in outputs:
       self._probabilities[field] = outputs[field].pop('probabilities')
       self._accuracies[field] = outputs[field]
-    
+
     #-----------------------------------------------------------
     filename = os.path.join(self.save_dir, '{}.pkl'.format(self.dataset))
     # TODO make a separate History object
@@ -154,9 +160,9 @@ class GraphOutputs(object):
     return
   
   #=============================================================
-  def probs_to_preds(self, probabilities, lengths):
+  def probs_to_preds(self, probabilities, lengths, augment_layers=None):
     """"""
-    
+
     predictions = {}
     
     if 'form' in probabilities:
@@ -237,6 +243,8 @@ class GraphOutputs(object):
         semhead_probs = semgraph_probs.sum(axis=-1)
         # (n x m x m) -> (n x m x m)
         semhead_preds = np.where(semhead_probs >= .5, 1, 0)
+        if augment_layers is not None:
+          semhead_preds = self.augment_head_with_acc(semhead_preds, probabilities['acc'], augment_layers)
         # (n x m x m x c) -> (n x m x m)
         semrel_preds = np.argmax(semgraph_probs, axis=-1)
         # (n x m x m) (*) (n x m x m) -> (n x m x m)
@@ -254,6 +262,29 @@ class GraphOutputs(object):
             if pred:
               sparse_semgraph_preds[-1][-1].append((k, semgraph_preds[i,j,k]))
     return predictions
+
+  def augment_head_with_acc(self, semhead_preds, acc_probs, n_layers=[1]):
+    """
+    Augment semhead_preds with arcs predicted in graph attention masks
+    Input:
+          semhead_preds: shape: (n x m x m), 0-1 matrix for output graph
+          n_layers: the layers which are used to augment the output graph
+    """
+    output_preds = semhead_preds
+    n_addeds = []
+    #print ('orig:\n',output_preds)
+    for n in n_layers:
+      probs = acc_probs[n]
+      # (n x m x m) -> (n x m x m)
+      preds = np.where(probs >= .5, 1, 0)
+      #print ('layer-{}:\n'.format(n),preds)
+      overlapped = preds * output_preds
+      n_added = np.sum(preds - overlapped)
+      n_addeds.append(n_added)
+      print ("## Added {} arcs from layer-{}.".format(n_added, n))
+      output_preds = output_preds + preds - overlapped
+    print ('## Added {} arcs in total.'.format(sum(n_addeds)))
+    return output_preds
   
   def sem16decoder(self, semgraph_probs, lengths):
     # (n x m x m x c) -> (n x m x m)
