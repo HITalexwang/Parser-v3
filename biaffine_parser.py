@@ -15,6 +15,8 @@ from six.moves import input
 import codecs
 from argparse import ArgumentParser
 
+import tensorflow as tf
+
 from parser_model.config import Config
 import parser_model
 
@@ -36,7 +38,7 @@ class Biaffine_Parser(object):
 
     config = Config(defaults_file='', config_file=config_file, **kwargs)
     network_class = config.get('DEFAULT', 'network_class')
-    NetworkClass = getattr(parser, network_class)
+    NetworkClass = getattr(parser_model, network_class)
     self.network = NetworkClass(input_networks=set(), config=config)
     return
 
@@ -95,7 +97,8 @@ class Biaffine_Parser(object):
         Note that the List is the predicted heads, which may contain more than one head.
     """
     sentences_ = [self.sentence2conllu(sent) for sent in sentences]
-    predictions = self.network.parse_wrapper(sentences_)
+    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+      predictions = self.network.parse_wrapper(sentences_)
     predictions_ = [[(tok[0],tok[1],tok[3],tok[8]) for tok in pred] for pred in predictions]
     predictions_ = [self.refine_output(pred) for pred in predictions_]
     return predictions_

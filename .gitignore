@@ -5,7 +5,7 @@
 *.old.py
 
 # Data directory
-#data/
+data/
 saves/
 *.tar.gz
 
@@ -13,3 +13,8 @@ saves/
 *.log
 output/
 tmp/
+
+.idea
+bert
+*.xlsx
+experiments/
