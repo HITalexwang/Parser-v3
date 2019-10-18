@@ -72,7 +72,8 @@ class GraphOutputs(object):
     if 'acc' in outputs:
       acc_output = outputs.pop('acc')
       self._probabilities['acc'] = acc_output['probabilities']
-      self._evals.remove('acc')
+      if 'acc' in self._evals:
+        self._evals.remove('acc')
 
     for eval_ in list(self._evals):
       assert eval_ in valid_evals
