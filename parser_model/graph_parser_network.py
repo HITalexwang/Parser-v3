@@ -154,7 +154,8 @@ class GraphParserNetwork(BaseNetwork):
                                                       initializer_range=0.02,
                                                       supervision=self.supervision,
                                                       smoothing_rate=self.smoothing_rate,
-                                                      acc_inters=acc_inters)
+                                                      acc_inters=acc_inters,
+                                                      rm_prev_tp=self.rm_prev_tp)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
@@ -259,3 +260,6 @@ class GraphParserNetwork(BaseNetwork):
   @property
   def n_std_layers(self):
     return self._config.getint(self, 'n_std_layers')
+  @property
+  def rm_prev_tp(self):
+    return self._config.getboolean(self, 'rm_prev_tp')

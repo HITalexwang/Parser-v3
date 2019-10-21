@@ -45,7 +45,8 @@ class GraphTransformerConfig(object):
                initializer_range=0.02,
                supervision='graph-bi',
                smoothing_rate=0,
-               acc_inters=None):
+               acc_inters=None,
+               rm_prev_tp=False):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -67,6 +68,9 @@ class GraphTransformerConfig(object):
       initializer_range: The stdev of the truncated_normal_initializer for
         initializing all weight matrices.
       supervision: The supervision type. (i.e. `direct` or `mask` or `none`)
+      smoothing_rate: smoothing rate for the sigmoid cross-entropy
+      acc_inters: interpolatio between fp and fn loss of each layers
+      rm_prev_tp: remove previous true positive predictions from the gold graph ?
     """
     self.hidden_size = hidden_size
     self.num_hidden_layers = num_hidden_layers
@@ -81,6 +85,7 @@ class GraphTransformerConfig(object):
     self.supervision = supervision
     self.smoothing_rate = smoothing_rate
     self.acc_inters = acc_inters
+    self.rm_prev_tp = rm_prev_tp
     assert supervision in ['direct', 'mask-bi', 'mask-uni', 'none', 'graph-bi', 'graph-uni']
     if supervision != 'none':
       assert acc_inters is not None
@@ -225,7 +230,8 @@ class GraphTransformer(object):
             do_return_all_layers=True,
             supervision=config.supervision,
             smoothing_rate=config.smoothing_rate,
-            acc_inters=config.acc_inters)
+            acc_inters=config.acc_inters,
+            rm_prev_tp=config.rm_prev_tp)
 
       self.sequence_output = self.all_encoder_layers[-1]
 
@@ -832,6 +838,7 @@ def attention_layer(from_tensor,
     outputs['n_acc_false_positives'] = n_false_positives
     outputs['n_acc_false_negatives'] = n_false_negatives
     outputs['probabilities'] = probabilities
+    outputs['true_positives'] = true_positives
 
   if attention_mask is not None:
     # `attention_mask` = [B, 1, F, T]
@@ -914,7 +921,8 @@ def graph_transformer_model(input_tensor,
                       do_return_all_layers=False,
                       supervision='mask-bi',
                       smoothing_rate=0,
-                      acc_inters=None):
+                      acc_inters=None,
+                      rm_prev_tp=False):
   """Multi-headed, multi-layer Transformer from "Attention is All You Need".
 
   This is almost an exact implementation of the original Transformer encoder.
@@ -992,6 +1000,11 @@ def graph_transformer_model(input_tensor,
     accessible_outputs = None
   if accessible_matrices is None:
     accessible_matrices = [None] * num_hidden_layers
+  prev_true_positives = None
+
+  if supervision.startswith('graph'):
+    # here the accessible_matrices is the graph adjacency matrix
+    acc_matrix = accessible_matrices
 
   for layer_idx in range(num_hidden_layers):
     with tf.variable_scope("layer_%d" % layer_idx):
@@ -1001,8 +1014,10 @@ def graph_transformer_model(input_tensor,
         attention_heads = []
         with tf.variable_scope("self"):
           if supervision.startswith('graph'):
-            # here the accessible_matrices is the graph adjacency matrix
-            acc_matrix = accessible_matrices
+            if rm_prev_tp and prev_true_positives is not None:
+              acc_matrix = acc_matrix - prev_true_positives
+            else:
+              acc_matrix = accessible_matrices
           else:
             acc_matrix = accessible_matrices[layer_idx]
           if supervision == 'none':
@@ -1027,6 +1042,8 @@ def graph_transformer_model(input_tensor,
               smoothing_rate=smoothing_rate,
               acc_inter=acc_inter)
           attention_heads.append(attention_head)
+          if 'true_positives' in outputs:
+            prev_true_positives = outputs.pop('true_positives')
           for field in outputs:
             accessible_outputs[field].append(outputs[field])
 

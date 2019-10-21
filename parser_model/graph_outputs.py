@@ -626,6 +626,8 @@ class GraphOutputs(object):
         if isinstance(self.history[field]['fp_tokens'], list):
           n_layers = len(self.history[field]['fp_tokens'])
           for i in range(n_layers):
+            n_tp = self.history[field]['tokens'][-1][i]
+            n_gold = n_tp + self.history[field]['fn_tokens'][i]
             self.history[field]['tokens'][-1][i], precision, recall = [v*100 for v in self.compute_token_F1_PR_index(field, i)]
             acc = self.history[field]['tokens'][-1][i]
             print('{:5}'.format('L-'+str(i)), end='')
@@ -634,7 +636,11 @@ class GraphOutputs(object):
             print(' | ', end='')
             print('P: {:5.2f}'.format(precision), end='')
             print(' | ', end='')
-            print('R: {:5.2f}\n'.format(recall), end='')
+            print('R: {:5.2f}'.format(recall), end='')
+            print(' | ', end='')
+            print('gold: {:5.2f}'.format(n_gold), end='')
+            print(' | ', end='')
+            print('tp: {:5.2f}\n'.format(n_tp), end='')
           self.history[field]['tokens'].append([0]*n_layers)
           self.history[field]['fp_tokens'] = [0]*n_layers
           self.history[field]['fn_tokens'] = [0]*n_layers
