@@ -170,13 +170,29 @@ class GraphParserNetwork(BaseNetwork):
       transformer = graph_transformer.GraphTransformer(config, not reuse, layer, 
                                                         input_mask=input_mask_3D,
                                                         accessible_matrices=acc_matrices)
-      # shape = [batch_size, seq_len, hidden_size]
-      layer = transformer.get_sequence_output()
+      if self.concat_all_layers:
+        layers = transformer.get_all_encoder_layers()
+        # shape = [batch_size, seq_len, hidden_size*n_layers]
+        concat_layer = tf.concat(layers, -1)
+        # shape = [batch_size, seq_len, hidden_size]
+        layer = tf.layers.dense(
+            concat_layer,
+            self.hidden_size,
+            activation=None,
+            name="layers2hidden",
+            kernel_initializer=tf.truncated_normal_initializer(stddev=0.02))
+      else:
+        # shape = [batch_size, seq_len, hidden_size]
+        layer = transformer.get_sequence_output()
       acc_outputs = None
       if self.supervision != 'none':
         acc_outputs = transformer.get_accessible_outputs()
         if self.supervision.startswith('graph'):
-          acc_outputs['acc_loss'] = tf.reduce_sum(acc_outputs['acc_loss'])
+          if not reuse and self.n_steps_change_loss_weight > 0:
+            self.loss_weights = tf.placeholder(tf.float32, shape=[self.n_layers], name='loss-weights')
+            acc_outputs['acc_loss'] = tf.reduce_sum(self.loss_weights * tf.stack(acc_outputs['acc_loss']))
+          else:
+            acc_outputs['acc_loss'] = tf.reduce_sum(acc_outputs['acc_loss'])
         else:
           for field in acc_outputs:
             if field == 'probabilities': continue
@@ -263,3 +279,15 @@ class GraphParserNetwork(BaseNetwork):
   @property
   def rm_prev_tp(self):
     return self._config.getboolean(self, 'rm_prev_tp')
+  @property
+  def concat_all_layers(self):
+    return self._config.getboolean(self, 'concat_all_layers')
+  @property
+  def n_steps_change_loss_weight(self):
+    return self._config.getint(self, 'n_steps_change_loss_weight')
+  @property
+  def main_loss_weight(self):
+    return self._config.getfloat(self, 'main_loss_weight')
+  @property
+  def aux_loss_weight(self):
+    return self._config.getfloat(self, 'aux_loss_weight')

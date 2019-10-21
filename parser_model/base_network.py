@@ -244,6 +244,16 @@ class BaseNetwork(object):
         print ("Removed")
         exit(1)
       else:
+        self.feed_loss_weight = False
+        if hasattr(self, 'n_steps_change_loss_weight') and self.n_steps_change_loss_weight > 0:
+          #print (self.n_steps_change_loss_weight)
+          self.feed_loss_weight = True
+          self.main_loss_layer_id = 0
+          assert hasattr(self, 'n_layers')
+          assert hasattr(self, 'main_loss_weight')
+          assert hasattr(self, 'aux_loss_weight')
+          self._loss_weights = [self.aux_loss_weight] * self.n_layers
+          self._loss_weights[self.main_loss_layer_id] = self.main_loss_weight
         current_optimizer = 'Adam'
         train_tensors = adam_train_tensors
         current_step = 0
@@ -268,6 +278,15 @@ class BaseNetwork(object):
               train_outputs.restart_timer()
               start_time = time.time()
               feed_dict = trainset.set_placeholders(batch)
+              if self.feed_loss_weight:
+                # add loss weight to feed_dict
+                feed_dict[self.loss_weights] = self._loss_weights
+                # if reach change point, change loss weights
+                if (current_step + 1) % self.n_steps_change_loss_weight == 0:
+                  self.main_loss_layer_id = (self.main_loss_layer_id + 1) % self.n_layers
+                  self._loss_weights = [self.aux_loss_weight] * self.n_layers
+                  self._loss_weights[self.main_loss_layer_id] = self.main_loss_weight
+                  print ('Change loss weights to {}\n'.format(self._loss_weights))
               #---
               if current_step < 1:
                 _, train_scores = sess.run(train_tensors, feed_dict=feed_dict, options=options, run_metadata=run_metadata)
