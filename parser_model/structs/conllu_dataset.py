@@ -46,7 +46,7 @@ class CoNLLUDataset(set):
   setname = 'test'
 
   #=============================================================
-  def __init__(self, conllu_files, vocabs, config=None):
+  def __init__(self, conllu_files, vocabs, config=None, add_null_token=False):
     """"""
     
     super(CoNLLUDataset, self).__init__(vocabs)
@@ -58,6 +58,7 @@ class CoNLLUDataset(set):
     self._conllu_files = conllu_files
     assert len(conllu_files) > 0, "You didn't pass in any valid CoNLLU files! Maybe you got the path wrong?"
     self._cur_file_idx = -1
+    self._add_null_token = add_null_token
     
     self.load_next()
     return
@@ -110,16 +111,21 @@ class CoNLLUDataset(set):
     for vocab in self:
       tokens = [line[vocab.conllu_idx] for line in sent]
       tokens.insert(0, vocab.get_root())
+      if self._add_null_token:
+        tokens.append(vocab.get_null())
       if 'FormMultivocab' in vocab.__class__.__name__:
         poss = ['UNK']
         for wid in range(len(sent)):
           poss.append(self.setname+'-'+str(sid)+'-'+str(wid))
+        if self._add_null_token:
+          poss.append('UNK')
         indices = vocab.add_sequence(tokens, poss)
       else:
         indices = vocab.add_sequence(tokens) # for graphs, list of (head, label) pairs
       sent_tokens[vocab.classname] = tokens
       sent_indices[vocab.classname] = indices
-    self._multibucket.add(sent_indices, sent_tokens, length=len(sent)+1)
+      #print ('vocab:{}\ntokens:{}\nindices:{}\n'.format(vocab.classname, tokens, indices))
+    self._multibucket.add(sent_indices, sent_tokens, length=len(tokens))
     return
   
   #=============================================================

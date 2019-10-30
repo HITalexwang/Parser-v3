@@ -125,7 +125,8 @@ class SetVocab(BaseVocab):
   """"""
 
   # _base_special_tokens = [u'@@pad@@', u'@@root@@', u'@@unk@@']
-  _base_special_tokens = [u'pad', u'root', u'unk']
+  #_base_special_tokens = [u'pad', u'root', u'unk']
+  _base_special_tokens = [u'pad', u'root', u'unk', u'null']
 
   #=============================================================
   def __init__(self, *args, **kwargs):
@@ -175,6 +176,12 @@ class SetVocab(BaseVocab):
     """"""
 
     return self.ROOT_STR
+
+  #=============================================================
+  def get_null(self):
+    """"""
+
+    return self.NULL_STR
 
   #=============================================================
   @property

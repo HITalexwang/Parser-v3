@@ -73,6 +73,12 @@ class IndexVocab(BaseVocab):
     """"""
     
     return self.ROOT_STR
+
+  #=============================================================
+  def get_null(self):
+    """"""
+    
+    return '_'
   
   #=============================================================
   def get_bilinear_classifier(self, layer, token_weights, variable_scope=None, reuse=False):
@@ -497,6 +503,12 @@ class GraphIndexVocab(IndexVocab):
   
   #=============================================================
   def get_root(self):
+    """"""
+    
+    return '_'
+
+  #=============================================================
+  def get_null(self):
     """"""
     
     return '_'

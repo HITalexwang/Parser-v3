@@ -202,6 +202,12 @@ class Multivocab(BaseVocab, list):
     """"""
     
     return self.ROOT_STR
+
+  #=============================================================
+  def get_null(self):
+    """"""
+    
+    return self.NULL_STR
   
   #=============================================================
   def open(self):

@@ -5,3 +5,4 @@ from parser_model.parser_network import ParserNetwork
 from parser_model.tagger_network import TaggerNetwork
 from parser_model.graph_parser_network import GraphParserNetwork
 from parser_model.base_network import BaseNetwork
+from parser_model.easy_first_network import EasyFirstNetwork
