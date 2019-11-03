@@ -133,8 +133,6 @@ class EasyFirstNetwork(BaseNetwork):
         # shape = [batch_size, seq_len, hidden_size]
         layer = transformer.get_sequence_output()
 
-    acc_inters = None if self.supervision == 'none' else self.acc_inters
-
     config = easy_first_transformer.EasyFirstTransformerConfig(hidden_size=self.hidden_size,
                                                       num_hidden_layers=self.n_layers,
                                                       num_attention_heads=self.n_attention_heads,
@@ -147,7 +145,6 @@ class EasyFirstNetwork(BaseNetwork):
                                                       initializer_range=0.02,
                                                       supervision=self.supervision,
                                                       smoothing_rate=self.smoothing_rate,
-                                                      acc_inters=acc_inters,
                                                       rm_prev_tp=self.rm_prev_tp)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
@@ -156,13 +153,10 @@ class EasyFirstNetwork(BaseNetwork):
     with tf.variable_scope('Transformer'):
       # shape = [batch_size, seq_len, seq_len]
       input_mask_3D = tf.expand_dims(root_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
-      if self.supervision.startswith('easy-first'):
-        acc_matrices = output_fields['semhead'].placeholder
-      else:
-        acc_matrices = output_fields['semhead'].accessible_placeholders
+      unlabeled_targets = output_fields['semhead'].placeholder
       transformer = easy_first_transformer.EasyFirstTransformer(config, not reuse, layer, 
                                                         input_mask=input_mask_3D,
-                                                        accessible_matrices=acc_matrices,
+                                                        unlabeled_targets=unlabeled_targets,
                                                         null_mask=null_mask)
       if self.concat_all_layers:
         layers = transformer.get_all_encoder_layers()
@@ -178,50 +172,46 @@ class EasyFirstNetwork(BaseNetwork):
       else:
         # shape = [batch_size, seq_len, hidden_size]
         layer = transformer.get_sequence_output()
-      acc_outputs = None
-      if self.supervision != 'none':
-        acc_outputs = transformer.get_accessible_outputs()
-        if self.supervision.startswith('easy-first'):
-          if not reuse and self.n_steps_change_loss_weight > 0:
-            self.loss_weights = tf.placeholder(tf.float32, shape=[self.n_layers], name='loss-weights')
-            acc_outputs['acc_loss'] = tf.reduce_sum(self.loss_weights * tf.stack(acc_outputs['acc_loss']))
-          else:
-            acc_outputs['acc_loss'] = tf.reduce_sum(acc_outputs['acc_loss'])
-        else:
-          for field in acc_outputs:
-            if field == 'probabilities': continue
-            acc_outputs[field] = tf.reduce_sum(acc_outputs[field])
+
+      acc_outputs = transformer.get_outputs()
+      if not reuse and self.n_steps_change_loss_weight > 0:
+        self.loss_weights = tf.placeholder(tf.float32, shape=[self.n_layers], name='loss-weights')
+        acc_outputs['acc_loss'] = tf.reduce_sum(self.loss_weights * tf.stack(acc_outputs['acc_loss']))
+      else:
+        acc_outputs['acc_loss'] = tf.add_n(acc_outputs['acc_loss'])
     
+    unlabeled_outputs = {}
+    unlabeled_outputs['unlabeled_targets'] = output_fields['semhead'].placeholder
+    unlabeled_outputs['probabilities'] = acc_outputs['probabilities']
+    unlabeled_outputs['unlabeled_loss'] = acc_outputs['acc_loss']
+    unlabeled_outputs['loss'] = acc_outputs['acc_loss']
+    
+    unlabeled_outputs['unlabeled_predictions'] = acc_outputs['predictions']
+    unlabeled_outputs['n_unlabeled_true_positives'] = acc_outputs['n_unlabeled_true_positives']
+    unlabeled_outputs['n_unlabeled_false_positives'] = acc_outputs['n_unlabeled_false_positives']
+    unlabeled_outputs['n_unlabeled_false_negatives'] = acc_outputs['n_unlabeled_false_negatives']
+    unlabeled_outputs['n_correct_unlabeled_sequences'] = acc_outputs['n_correct_unlabeled_sequences']
+    unlabeled_outputs['predictions'] = acc_outputs['predictions']
+
     with tf.variable_scope('Classifiers'):
       if 'semrel' in output_fields:
         vocab = output_fields['semrel']
-        if vocab.factorized:
-          head_vocab = output_fields['semhead']
-          with tf.variable_scope('Unlabeled'):
-            unlabeled_outputs = head_vocab.get_bilinear_discriminator(
-              layer,
-              token_weights=token_weights3D,
-              reuse=reuse)
-          with tf.variable_scope('Labeled'):
-            labeled_outputs = vocab.get_bilinear_classifier(
+        with tf.variable_scope('Labeled'):
+          labeled_outputs = vocab.get_bilinear_classifier(
               layer, unlabeled_outputs,
               token_weights=token_weights3D,
               reuse=reuse)
-        else:
-          labeled_outputs = vocab.get_unfactored_bilinear_classifier(layer, head_vocab.placeholder,
-            token_weights=token_weights3D,
-            reuse=reuse)
         outputs['semgraph'] = labeled_outputs
-        if acc_outputs is not None:
-          outputs['semgraph']['loss'] += acc_outputs['acc_loss']
-          for field in acc_outputs:
-            if field == 'probabilities':
-              outputs['acc'] = {field : acc_outputs[field]}
-            else:
-              outputs['semgraph'][field] = acc_outputs[field]
+        #if acc_outputs is not None:
+          #outputs['semgraph']['loss'] += acc_outputs['acc_loss']
+          #for field in acc_outputs:
+          #  if field == 'probabilities':
+          #    outputs['acc'] = {field : acc_outputs[field]}
+          #  else:
+          #    outputs['semgraph'][field] = acc_outputs[field]
         self._evals.add('semgraph')
-    
-
+    outputs['semgraph']['preds_by_layer'] = acc_outputs['preds_by_layer']
+    outputs['semgraph']['allowed_heads'] = acc_outputs['allowed_heads']
     return outputs, tokens
   
   #=============================================================
@@ -458,9 +448,6 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def smoothing_rate(self):
     return self._config.getfloat(self, 'smoothing_rate')
-  @property
-  def acc_inters(self):
-    return [float(f) for f in self._config.getlist(self, 'acc_inters')]
   @property
   def n_std_layers(self):
     return self._config.getint(self, 'n_std_layers')

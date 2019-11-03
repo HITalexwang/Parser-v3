@@ -493,7 +493,10 @@ class GraphOutputs(object):
   #=============================================================
   def update_history(self, outputs):
     """"""
-    
+    #print ('allowed heads:\n',outputs['semgraph']['allowed_heads'])
+    #print ('pred by layers:\n',outputs['semgraph']['preds_by_layer'])
+    #print ('sumed preds:\n',outputs['semgraph']['predictions'])
+
     self.history['total']['total_time'] += time.time() - self.time
     self.time = None
     self.history['total']['n_batches'] += 1
@@ -571,6 +574,9 @@ class GraphOutputs(object):
         tokens = self.history[field]['tokens'][-1]
         if field in ('semgraph', 'semhead'):
           tp = self.history[field]['tokens'][-1]
+          print ('tp:{}, pred:{}, gold:{}'.format(self.history[field]['tokens'][-1],
+            self.history[field]['tokens'][-1]+self.history[field]['fp_tokens'],
+            self.history[field]['tokens'][-1]+self.history[field]['fn_tokens']))
           self.history[field]['tokens'][-1], precision, recall = [v*100 for v in self.compute_token_F1_PR(field)]
         elif field == 'semrel':
           n_edges = self.history[field]['n_edges']
