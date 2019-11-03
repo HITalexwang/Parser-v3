@@ -45,7 +45,9 @@ class EasyFirstTransformerConfig(object):
                initializer_range=0.02,
                supervision='graph-bi',
                smoothing_rate=0,
-               rm_prev_tp=False):
+               rm_prev_tp=False,
+               num_sup_heads=1,
+               n_top_heads=4):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -69,6 +71,8 @@ class EasyFirstTransformerConfig(object):
       supervision: The supervision type. (i.e. `direct` or `mask` or `none`)
       smoothing_rate: smoothing rate for the sigmoid cross-entropy
       rm_prev_tp: remove previous true positive predictions from the gold graph ?
+      num_sup_heads: number of supervised attention heads
+      n_top_heads: number of chosen heads for each layer
     """
     self.hidden_size = hidden_size
     self.num_hidden_layers = num_hidden_layers
@@ -83,6 +87,8 @@ class EasyFirstTransformerConfig(object):
     self.supervision = supervision
     self.smoothing_rate = smoothing_rate
     self.rm_prev_tp = rm_prev_tp
+    self.num_sup_heads = num_sup_heads
+    self.n_top_heads = n_top_heads
     assert supervision in ['easy-first', 'mask-bi', 'mask-uni', 'none', 'graph-bi', 'graph-uni']
 
   @classmethod
@@ -225,7 +231,9 @@ class EasyFirstTransformer(object):
             initializer_range=config.initializer_range,
             do_return_all_layers=True,
             supervision=config.supervision,
-            smoothing_rate=config.smoothing_rate)
+            smoothing_rate=config.smoothing_rate,
+            num_sup_heads=config.num_sup_heads,
+            n_top_heads=config.n_top_heads)
 
       self.sequence_output = self.all_encoder_layers[-1]
 
@@ -582,7 +590,8 @@ def attention_layer(from_tensor,
                     supervision='easy-first',
                     smoothing_rate=0,
                     reuse_weight=True,
-                    num_sup_heads=1):
+                    num_sup_heads=1,
+                    n_top_heads=4):
   """Performs multi-headed attention from `from_tensor` to `to_tensor`.
 
   This is an implementation of multi-headed attention based on "Attention
@@ -635,7 +644,8 @@ def attention_layer(from_tensor,
       of the 3D version of the `to_tensor`.
     supervision: supervision type (i.e. `direct` or `mask`)
     reuse_weight: whether to reuse attention weights across layers
-    num_sup_heads: number of supervised heads
+    num_sup_heads: number of supervised attention heads
+    n_top_heads: number of selected head at this layer
 
   Returns:
     float Tensor of shape [batch_size, from_seq_length,
@@ -745,7 +755,8 @@ def attention_layer(from_tensor,
     losses, predictions, probabilities, attention_probs, used_heads, allowed_heads = easy_first_one_step(
                                           remained_unlabeled_targets, attention_scores, 
                                           attention_mask, null_mask, 
-                                          num_sup_heads, num_attention_heads)
+                                          num_sup_heads, num_attention_heads,
+                                          n_top_heads)
     outputs['acc_loss'] = tf.add_n(losses)
     outputs['predictions'] = predictions
     outputs['probabilities'] = probabilities
@@ -810,7 +821,7 @@ def attention_layer(from_tensor,
   return context_layer, outputs
 
 def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_mask, null_mask, 
-                      num_sup_heads=1, num_attention_heads=8):
+                      num_sup_heads=1, num_attention_heads=8, n_top_heads=4):
   """
   attention_scores: [B, N, F, T], N attention heads
   null_mask: [B, F]
@@ -844,7 +855,7 @@ def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_
     #null_indices = tf.argmax(null_mask, axis=-1)
     # [B, F], the best allowed dep heads at attention head-i 
     #best_allowed_heads = tf.argmax(allowed_scores, axis=-1, output_type=tf.int32)
-    best_allowed_heads = top_k_heads(allowed_scores, null_mask, k=3)
+    best_allowed_heads = top_k_heads(allowed_scores, null_mask, n=n_top_heads)
     used_heads.append(best_allowed_heads)
     # [B, F], [B, F, T], [B, F] -> ()
     loss = tf.losses.sparse_softmax_cross_entropy(best_allowed_heads, supervised_logits, 
@@ -894,29 +905,28 @@ def gather_subgraphs(head_index_list, attention_mask):
   gathered_graph = nn.greater(tf.add_n(matrices), 0) * attention_mask
   return gathered_graph
 
-def top_k_heads(scores,null_indices, k=3):
+def top_k_heads(scores, null_mask, n=4):
   """
   Input:
     scores: [B, F, T], the score matrix
     k: the number of top heads to return
-    null_indices: [B], the index of null token for each sentence
+    null_mask: [B, F], entry is 1 if is the null token, elsewise 0
   Return:
     best_allowed_heads: [B, F], each entry is the index of the predicted word
   """
   batch_size, from_seq_len, to_seq_len = get_shape_list(scores)
   # [B, F, T] -> [B, F*T] (reshape) -> [B, k]
-  _, top_indices = tf.nn.top_k(tf.reshape(scores, (batch_size,-1)), k)
+  _, top_indices = tf.nn.top_k(tf.reshape(scores, (batch_size,-1)), n)
   # [B, k, 2], the cordinates of top k arcs
   top_indices = tf.stack(((top_indices // to_seq_len), (top_indices % to_seq_len)), -1)
   # [B, k, 2] -> [B, T(=F), T], 1 represent the chosen head, 0 otherwise
-  head_tensor = indices_to_tensor(top_indices, batch_size, k, to_seq_len, value=1)
-  # [B, F, T] + [B, 1, F] -> [B, F, T], the null token with value 0.5
-  # the chosen head with value 1, if there is no head for a word, it would choose null
-  head_with_null = head_tensor + tf.expand_dims(null_mask, axis=1) * 0.5
+  head_tensor = indices_to_tensor(top_indices, batch_size, n, to_seq_len, value=1)
+  # [B, F, T] + [B, 1, F] -> [B, F, T], the null token with value 1
+  # the chosen head with value 2, if there is no head for a word, it would choose null
+  head_with_null = tf.scalar_mul(2, head_tensor) + tf.expand_dims(null_mask, axis=1)
   # [B, F, T] -> [B, F]
   best_allowed_heads = tf.argmax(head_with_null, axis=-1)
   return best_allowed_heads
-
 
 def indices_to_tensor(indices, batch_size, k, to_seq_len, value=1):
   """
@@ -930,14 +940,14 @@ def indices_to_tensor(indices, batch_size, k, to_seq_len, value=1):
   batch_idx = tf.reshape(tf.range(batch_size), [batch_size, 1, 1])
   # [B, k, 1]
   batch_index = tf.tile(batch_idx, [1, k, 1])
-  # [B, k, 3]
-  batched_indices = tf.concat([batch_index, top_indices], axis=-1)
+  # [B, k, 1], [B, k, 2] -> [B, k, 3]
+  batched_indices = tf.concat([batch_index, indices], axis=-1)
   # [B*k, 3]
   reshaped_indices = tf.reshape(batched_indices, [-1, 3])
 
   # [B*k]
-  values = tf.ones(batch_size*k) * value
-  shape = tf.constant([batch_size, to_seq_len, to_seq_len])
+  values = tf.ones(shape=[batch_size*k], dtype=tf.int32) * value
+  shape = [batch_size, to_seq_len, to_seq_len]
   # [B, T, T]
   tensor = tf.scatter_nd(reshaped_indices, values, shape)
   return tensor
@@ -959,7 +969,8 @@ def easy_first_transformer_model(input_tensor,
                       do_return_all_layers=False,
                       supervision='easy-first',
                       smoothing_rate=0,
-                      num_sup_heads=1):
+                      num_sup_heads=1,
+                      n_top_heads=4):
   """Multi-headed, multi-layer Transformer from "Attention is All You Need".
 
   This is almost an exact implementation of the original Transformer encoder.
@@ -1056,7 +1067,8 @@ def easy_first_transformer_model(input_tensor,
               supervision=supervision,
               smoothing_rate=smoothing_rate,
               reuse_weight=True,
-              num_sup_heads=num_sup_heads)
+              num_sup_heads=num_sup_heads,
+              n_top_heads=n_top_heads)
           attention_heads.append(attention_head)
           for field in outputs_:
             outputs[field].append(outputs_[field])

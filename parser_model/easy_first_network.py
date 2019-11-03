@@ -145,7 +145,9 @@ class EasyFirstNetwork(BaseNetwork):
                                                       initializer_range=0.02,
                                                       supervision=self.supervision,
                                                       smoothing_rate=self.smoothing_rate,
-                                                      rm_prev_tp=self.rm_prev_tp)
+                                                      rm_prev_tp=self.rm_prev_tp,
+                                                      num_sup_heads=self.n_supervised_attention_heads,
+                                                      n_top_heads=self.n_top_selected_depheads)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
@@ -466,3 +468,10 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def aux_loss_weight(self):
     return self._config.getfloat(self, 'aux_loss_weight')
+  @property
+  def n_supervised_attention_heads(self):
+    return self._config.getint(self, 'n_supervised_attention_heads')
+  @property
+  def n_top_selected_depheads(self):
+    return self._config.getint(self, 'n_top_selected_depheads')
+    
