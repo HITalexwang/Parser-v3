@@ -821,10 +821,10 @@ def attention_layer(from_tensor,
   return context_layer, outputs
 
 def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_mask, null_mask, 
-                      num_sup_heads=1, num_attention_heads=8, n_top_heads=4):
+                      num_sup_heads=1, num_attention_heads=8, n_top_heads=4, policy = 'random'):
   """
   attention_scores: [B, N, F, T], N attention heads
-  null_mask: [B, F]
+  null_mask: [B, F], the null token is 1, all others are 0
   """
   use_null_mask = True
   # [B, F, T] -> [B, F]
@@ -833,12 +833,12 @@ def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_
   else:
     sliced_attention_mask = attention_mask[:,:,0]
 
-  to_seq_length = get_shape_list(attention_scores)[-1]
+  batch_size, _, from_seq_length, to_seq_length = get_shape_list(attention_scores)
   # [B, 1, F] + [B, F, T] -> [B, F, T] , allowed heads including NULL
-  if use_null_mask:
-    allowed_heads = tf.expand_dims(null_mask, axis=1) + remained_unlabeled_targets
-  else:
-    allowed_heads = remained_unlabeled_targets
+  #if use_null_mask:
+  #  allowed_heads = tf.expand_dims(null_mask, axis=1) + remained_unlabeled_targets
+  #else:
+  allowed_heads = remained_unlabeled_targets
   losses = []
   predictions = []
   supervised_probs = []
@@ -854,11 +854,14 @@ def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_
     # [B], the index of null token for each sentence
     #null_indices = tf.argmax(null_mask, axis=-1)
     # [B, F], the best allowed dep heads at attention head-i 
-    #best_allowed_heads = tf.argmax(allowed_scores, axis=-1, output_type=tf.int32)
-    best_allowed_heads = top_k_heads(allowed_scores, null_mask, n=n_top_heads)
-    used_heads.append(best_allowed_heads)
+    #selected_gold_heads = tf.argmax(allowed_scores, axis=-1, output_type=tf.int32)
+    if policy == 'top_k':
+      selected_gold_heads = top_k_heads(allowed_scores, null_mask, n=n_top_heads)
+    elif policy == 'random':
+      selected_gold_heads = random_sample(allowed_heads, null_mask, from_seq_length)
+    used_heads.append(selected_gold_heads)
     # [B, F], [B, F, T], [B, F] -> ()
-    loss = tf.losses.sparse_softmax_cross_entropy(best_allowed_heads, supervised_logits, 
+    loss = tf.losses.sparse_softmax_cross_entropy(selected_gold_heads, supervised_logits, 
                                                   weights=sliced_attention_mask)
     losses.append(loss)
     # [B, F], the real prediction of attention head-i
@@ -866,7 +869,7 @@ def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_
     predictions.append(prediction)
 
     # [B, F, T], expand the selected heads to 3D
-    one_hot_probs = tf.one_hot(best_allowed_heads, to_seq_length, on_value=1.0, off_value=0.0, axis=-1)
+    one_hot_probs = tf.one_hot(selected_gold_heads, to_seq_length, on_value=1.0, off_value=0.0, axis=-1)
     supervised_probs.append(one_hot_probs)
 
   # Normalize the attention scores to probabilities.
@@ -905,6 +908,36 @@ def gather_subgraphs(head_index_list, attention_mask):
   gathered_graph = nn.greater(tf.add_n(matrices), 0) * attention_mask
   return gathered_graph
 
+def random_sample(allowed_heads, null_mask, seq_len):
+  """
+  Ramdonly sample one head for each word from the allowed_heads
+  Input:
+    allowed_heads: [B, F, T], entry is 1 if the head is allowed, elseweise 0
+    null_mask: [B, F], entry is 1 if is the null token, elsewise 0
+  Return:
+    selected_gold_heads: [B, F], each entry is the index of the chosen word
+  """
+  # [B], the null index of each sentence
+  null_indices = tf.argmax(null_mask, axis=-1)
+  # [B, F]
+  zeros = tf.zeros_like(null_mask, dtype=tf.int32)
+  # [B, F], tile null_indices to 2D
+  null_index_tensor = tf.cast(tf.expand_dims(null_indices, axis=-1), dtype=tf.int32) + zeros
+  # [B, F], number of allowed heads for each word
+  allowed_head_cnt = tf.reduce_sum(allowed_heads, axis=-1)
+  # [B, F, T], uniform mask in [0, 1)
+  random_mask = tf.random_uniform(shape=tf.shape(allowed_heads))
+  # [B, F], the randomly selected head index
+  selected_heads_ = tf.cast(tf.argmax(random_mask * tf.to_float(allowed_heads), axis=-1), dtype=tf.int32)
+  # [B, F], if there is no head allowed, select the null token
+  #print (allowed_head_cnt)
+  selected_gold_heads = tf.where(tf.equal(allowed_head_cnt,0), null_index_tensor, selected_heads_)
+
+  #debug_tensor = tf.concat([allowed_head_cnt, null_index_tensor,
+  # selected_heads_, selected_gold_heads], axis=-1)
+
+  return selected_gold_heads
+
 def top_k_heads(scores, null_mask, n=4):
   """
   Input:
@@ -912,7 +945,7 @@ def top_k_heads(scores, null_mask, n=4):
     k: the number of top heads to return
     null_mask: [B, F], entry is 1 if is the null token, elsewise 0
   Return:
-    best_allowed_heads: [B, F], each entry is the index of the predicted word
+    selected_gold_heads: [B, F], each entry is the index of the chosen word
   """
   batch_size, from_seq_len, to_seq_len = get_shape_list(scores)
   # [B, F, T] -> [B, F*T] (reshape) -> [B, k]
@@ -925,8 +958,8 @@ def top_k_heads(scores, null_mask, n=4):
   # the chosen head with value 2, if there is no head for a word, it would choose null
   head_with_null = tf.scalar_mul(2, head_tensor) + tf.expand_dims(null_mask, axis=1)
   # [B, F, T] -> [B, F]
-  best_allowed_heads = tf.argmax(head_with_null, axis=-1)
-  return best_allowed_heads
+  selected_gold_heads = tf.argmax(head_with_null, axis=-1)
+  return selected_gold_heads
 
 def indices_to_tensor(indices, batch_size, k, to_seq_len, value=1):
   """

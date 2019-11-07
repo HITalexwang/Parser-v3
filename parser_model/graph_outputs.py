@@ -493,7 +493,8 @@ class GraphOutputs(object):
   #=============================================================
   def update_history(self, outputs):
     """"""
-    #print ('allowed heads:\n',outputs['semgraph']['allowed_heads'])
+    #print ('remained heads:\n',outputs['semgraph']['allowed_heads'])
+    #print ('used heads(y):\n',outputs['semgraph']['used_heads'])
     #print ('pred by layers:\n',outputs['semgraph']['preds_by_layer'])
     #print ('sumed preds:\n',outputs['semgraph']['predictions'])
 

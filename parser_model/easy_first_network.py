@@ -111,7 +111,7 @@ class EasyFirstNetwork(BaseNetwork):
 
     # shape = [batch_size, bucket_size], the null token is 1, all others are 0
     null_mask = nn.equal(self.id_vocab.placeholder, -1)
-    
+
     if self.n_std_layers > 0:
       config_std = graph_transformer.GraphTransformerConfig(hidden_size=self.hidden_size,
                                                         num_hidden_layers=self.n_std_layers,
@@ -214,6 +214,7 @@ class EasyFirstNetwork(BaseNetwork):
         self._evals.add('semgraph')
     outputs['semgraph']['preds_by_layer'] = acc_outputs['preds_by_layer']
     outputs['semgraph']['allowed_heads'] = acc_outputs['allowed_heads']
+    outputs['semgraph']['used_heads'] = acc_outputs['used_heads']
     return outputs, tokens
   
   #=============================================================
