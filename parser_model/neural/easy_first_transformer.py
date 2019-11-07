@@ -823,6 +823,7 @@ def attention_layer(from_tensor,
 def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_mask, null_mask, 
                       num_sup_heads=1, num_attention_heads=8, n_top_heads=4, policy = 'random'):
   """
+  remained_unlabeled_targets: [B, F, T], the arcs that have not been generated yet
   attention_scores: [B, N, F, T], N attention heads
   null_mask: [B, F], the null token is 1, all others are 0
   """
@@ -859,10 +860,18 @@ def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_
       selected_gold_heads = top_k_heads(allowed_scores, null_mask, n=n_top_heads)
     elif policy == 'random':
       selected_gold_heads = random_sample(allowed_heads, null_mask, from_seq_length)
+    # [B, 1], the number of remained arcs of each sentence
+    remained_arcs_cnt = tf.reduce_sum(tf.reduce_sum(remained_unlabeled_targets, axis=-1), axis=-1, keep_dims=True)
+    # [B, F]
+    zero_mask = tf.zeros_like(sliced_attention_mask)
+    # [B, F], tile it to 2D
+    remained_arcs_cnt_ = remained_arcs_cnt + zero_mask
+    # [B, F]
+    new_attention_mask = tf.where(tf.equal(remained_arcs_cnt_,0), zero_mask, sliced_attention_mask)
     used_heads.append(selected_gold_heads)
     # [B, F], [B, F, T], [B, F] -> ()
     loss = tf.losses.sparse_softmax_cross_entropy(selected_gold_heads, supervised_logits, 
-                                                  weights=sliced_attention_mask)
+                                                  weights=new_attention_mask)
     losses.append(loss)
     # [B, F], the real prediction of attention head-i
     prediction = tf.argmax(supervised_logits, axis=-1, output_type=tf.int32)
@@ -1075,8 +1084,8 @@ def easy_first_transformer_model(input_tensor,
 
   for layer_idx in range(num_hidden_layers):
     #print ('layer_id:{}'.format(layer_idx))
-    with tf.variable_scope("layer_%d" % layer_idx):
-    #with tf.variable_scope("block", reuse=tf.AUTO_REUSE):
+    #with tf.variable_scope("layer_%d" % layer_idx):
+    with tf.variable_scope("block", reuse=tf.AUTO_REUSE):
       layer_input = prev_output
 
       with tf.variable_scope("attention"):
