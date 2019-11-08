@@ -44,7 +44,11 @@ class DictMultibucket(BaseMultibucket, dict):
                                   save_as_pickle=vocab.save_as_pickle, acc_loadname=os.path.join(
                                     vocab.acc_loadpath, setname+'-acc_bkt-'+str(idx)+'.pkl'),
                                   top_full_connect=vocab.top_full_connect,
-                                  symmetrize_adj_first=vocab.symmetrize_adj_first) for idx in six.moves.range(max_buckets)]
+                                  symmetrize_adj_first=vocab.symmetrize_adj_first,
+                                  insert_null_token=vocab.insert_null_token) for idx in six.moves.range(max_buckets)]
+      elif hasattr(vocab, 'insert_null_token'):
+        self[vocab.classname] = [DictBucket(idx, vocab.depth, config=config,
+                                  insert_null_token=vocab.insert_null_token) for idx in six.moves.range(max_buckets)]
       else:
         self[vocab.classname] = [DictBucket(idx, vocab.depth, config=config) for idx in six.moves.range(max_buckets)]
     

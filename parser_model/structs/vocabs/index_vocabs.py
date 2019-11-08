@@ -553,6 +553,9 @@ class GraphIndexVocab(IndexVocab):
   @property
   def symmetrize_adj_first(self):
     return self._config.getboolean(self, 'symmetrize_adj_first')
+  @property
+  def insert_null_token(self):
+    return self._config.getboolean(self, 'insert_null_token')
 
 
 #***************************************************************

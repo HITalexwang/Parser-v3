@@ -112,13 +112,13 @@ class CoNLLUDataset(set):
       tokens = [line[vocab.conllu_idx] for line in sent]
       tokens.insert(0, vocab.get_root())
       if self._add_null_token:
-        tokens.append(vocab.get_null())
+        tokens.insert(0, vocab.get_null())
       if 'FormMultivocab' in vocab.__class__.__name__:
         poss = ['UNK']
-        for wid in range(len(sent)):
-          poss.append(self.setname+'-'+str(sid)+'-'+str(wid))
         if self._add_null_token:
           poss.append('UNK')
+        for wid in range(len(sent)):
+          poss.append(self.setname+'-'+str(sid)+'-'+str(wid))
         indices = vocab.add_sequence(tokens, poss)
       else:
         indices = vocab.add_sequence(tokens) # for graphs, list of (head, label) pairs

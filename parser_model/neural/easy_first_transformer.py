@@ -828,11 +828,12 @@ def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_
   null_mask: [B, F], the null token is 1, all others are 0
   """
   use_null_mask = True
-  # [B, F, T] -> [B, F]
+  # [B, F, T] -> [B, F], use the second column, 
+  # since the first column is all 0 padding for null token
   if use_null_mask:
-    sliced_attention_mask = attention_mask[:,:,0] + null_mask
+    sliced_attention_mask = attention_mask[:,:,1] + null_mask
   else:
-    sliced_attention_mask = attention_mask[:,:,0]
+    sliced_attention_mask = attention_mask[:,:,1]
 
   batch_size, _, from_seq_length, to_seq_length = get_shape_list(attention_scores)
   # [B, 1, F] + [B, F, T] -> [B, F, T] , allowed heads including NULL
@@ -859,7 +860,7 @@ def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_
     if policy == 'top_k':
       selected_gold_heads = top_k_heads(allowed_scores, null_mask, n=n_top_heads)
     elif policy == 'random':
-      selected_gold_heads = random_sample(allowed_heads, null_mask, from_seq_length)
+      selected_gold_heads, null_index_tensor = random_sample(allowed_heads, null_mask, from_seq_length)
     # [B, 1], the number of remained arcs of each sentence
     remained_arcs_cnt = tf.reduce_sum(tf.reduce_sum(remained_unlabeled_targets, axis=-1), axis=-1, keep_dims=True)
     # [B, F]
@@ -894,11 +895,11 @@ def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_
   new_attention_probs = tf.concat([stacked_supervised_probs, 
                             attention_probs[:,num_sup_heads:,:,:]], axis=1)
   # S x [B, F] -> [B, F, T]
-  predictions = gather_subgraphs(predictions, attention_mask)
+  predictions_ = gather_subgraphs(predictions, attention_mask)
   # S x [B, F] -> [B, F, T]
-  used_heads = gather_subgraphs(used_heads, attention_mask)
+  used_heads_ = gather_subgraphs(used_heads, attention_mask)
 
-  return losses, predictions, probabilities, new_attention_probs, used_heads, allowed_heads
+  return losses, predictions_, probabilities, new_attention_probs, used_heads_, allowed_heads
 
 def gather_subgraphs(head_index_list, attention_mask):
   """
@@ -945,7 +946,7 @@ def random_sample(allowed_heads, null_mask, seq_len):
   #debug_tensor = tf.concat([allowed_head_cnt, null_index_tensor,
   # selected_heads_, selected_gold_heads], axis=-1)
 
-  return selected_gold_heads
+  return selected_gold_heads, null_index_tensor
 
 def top_k_heads(scores, null_mask, n=4):
   """

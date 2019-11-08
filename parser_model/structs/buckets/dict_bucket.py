@@ -37,7 +37,7 @@ class DictBucket(BaseBucket):
   #=============================================================
   def __init__(self, idx, depth, max_acc_depth=0, transpose_adjacency=True, config=None,
                 save_as_pickle=True, acc_loadname=None, top_full_connect=True,
-                symmetrize_adj_first=True):
+                symmetrize_adj_first=True, insert_null_token=True):
     """"""
     
     super(DictBucket, self).__init__(idx, config=config)
@@ -52,6 +52,7 @@ class DictBucket(BaseBucket):
     self._acc_loadname = acc_loadname
     self._top_full_connect = top_full_connect
     self._symmetrize_adj_first = symmetrize_adj_first
+    self._insert_null_token = insert_null_token
     
     return
   
@@ -111,9 +112,15 @@ class DictBucket(BaseBucket):
           for edge in node:
             if isinstance(edge, (tuple, list)):
               edge, v = edge
-              data[i, j, edge] = v
+              if self._insert_null_token:
+                data[i, j, edge+1] = v
+              else:
+                data[i, j, edge] = v
             else:
-              data[i, j, edge] = 1
+              if self._insert_null_token:
+                data[i, j, edge+1] = 1
+              else:
+                data[i, j, edge] = 1
               is_arc = True
       if is_arc and self.max_acc_depth > 0:
         # save time while predicting

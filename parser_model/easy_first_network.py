@@ -100,7 +100,8 @@ class EasyFirstNetwork(BaseNetwork):
 
     # this works as the mask (shape = [batch_size, bucket_size])
     # set the the first column of token_weights to be 1
-    root_weights = token_weights + (1-nn.greater(tf.range(bucket_size), 0))
+    #root_weights = token_weights + (1-nn.greater(tf.range(bucket_size), 0))
+    root_weights = token_weights + (nn.equal(tf.range(bucket_size), 1))
     # this is mask for arc/label prediction (shape = [batch_size, bucket_size, bucket_size])
     token_weights3D = tf.expand_dims(token_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
     tokens = {'n_tokens': n_tokens,
@@ -126,9 +127,9 @@ class EasyFirstNetwork(BaseNetwork):
 
       with tf.variable_scope('Transformer-std'):
         # shape = [batch_size, seq_len, seq_len]
-        input_mask_3D = tf.expand_dims(root_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
+        #input_mask_3D = tf.expand_dims(root_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
         transformer = graph_transformer.GraphTransformer(config_std, not reuse, layer, 
-                                                          input_mask=input_mask_3D,
+                                                          input_mask=token_weights3D,
                                                           accessible_matrices=None)
         # shape = [batch_size, seq_len, hidden_size]
         layer = transformer.get_sequence_output()
@@ -154,10 +155,10 @@ class EasyFirstNetwork(BaseNetwork):
 
     with tf.variable_scope('Transformer'):
       # shape = [batch_size, seq_len, seq_len]
-      input_mask_3D = tf.expand_dims(root_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
+      #input_mask_3D = tf.expand_dims(root_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
       unlabeled_targets = output_fields['semhead'].placeholder
       transformer = easy_first_transformer.EasyFirstTransformer(config, not reuse, layer, 
-                                                        input_mask=input_mask_3D,
+                                                        input_mask=token_weights3D,
                                                         unlabeled_targets=unlabeled_targets,
                                                         null_mask=null_mask)
       if self.concat_all_layers:

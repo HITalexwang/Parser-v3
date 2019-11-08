@@ -892,6 +892,11 @@ class GraphTokenVocab(TokenVocab):
     return '_'
   
   #=============================================================
+  @property
+  def insert_null_token(self):
+    return self._config.getboolean(self, 'insert_null_token')
+
+  #=============================================================
   def __getitem__(self, key):
     if isinstance(key, six.string_types):
       nodes = []
