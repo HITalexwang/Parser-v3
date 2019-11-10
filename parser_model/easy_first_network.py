@@ -177,6 +177,7 @@ class EasyFirstNetwork(BaseNetwork):
         layer = transformer.get_sequence_output()
 
       acc_outputs = transformer.get_outputs()
+      losses_by_layer = acc_outputs['acc_loss']
       if not reuse and self.n_steps_change_loss_weight > 0:
         self.loss_weights = tf.placeholder(tf.float32, shape=[self.n_layers], name='loss-weights')
         acc_outputs['acc_loss'] = tf.reduce_sum(self.loss_weights * tf.stack(acc_outputs['acc_loss']))
@@ -213,6 +214,7 @@ class EasyFirstNetwork(BaseNetwork):
           #  else:
           #    outputs['semgraph'][field] = acc_outputs[field]
         self._evals.add('semgraph')
+    outputs['semgraph']['losses_by_layer'] = losses_by_layer
     outputs['semgraph']['preds_by_layer'] = acc_outputs['preds_by_layer']
     outputs['semgraph']['allowed_heads'] = acc_outputs['allowed_heads']
     outputs['semgraph']['used_heads'] = acc_outputs['used_heads']
@@ -264,158 +266,340 @@ class EasyFirstNetwork(BaseNetwork):
     regularization_loss = self.l2_reg * tf.losses.get_regularization_loss() if self.l2_reg else 0
 
     update_step = tf.assign_add(self.global_step, 1)
-    if self.use_bert_adam:
-      adam_op = create_optimizer(loss=train_outputs.loss + regularization_loss,
-                                 init_lr=float(self._config._sections['Optimizer']['learning_rate']),
-                                 bert_lr=float(self._config._sections['Optimizer']['bert_learning_rate']),
-                                 num_train_steps=self.max_steps,
-                                 num_warmup_steps=self.warm_up_steps,
-                                 use_tpu=False)
-    else:
-      adam = AdamOptimizer(config=self._config)
-      adam_op = adam.minimize(train_outputs.loss + regularization_loss, \
-                              variables=tf.trainable_variables(scope=self.classname)) # returns the current step
-    adam_train_tensors = [adam_op, train_outputs.accuracies]
 
-    if self.switch_optimizers:
-      amsgrad = AMSGradOptimizer.from_optimizer(adam)
-      amsgrad_op = amsgrad.minimize(train_outputs.loss + regularization_loss, \
-                                    variables=tf.trainable_variables(scope=self.classname)) # returns the current step
-      amsgrad_train_tensors = [amsgrad_op, train_outputs.accuracies]
+    if train_outputs.losses_by_layer:
+      adam_ops = []
+      adam_optimizers = []
+      for n_layer, loss in enumerate(train_outputs.losses_by_layer):
+        if self.use_bert_adam:
+          adam_op = create_optimizer(loss=loss + regularization_loss,
+                                     init_lr=float(self._config._sections['Optimizer']['learning_rate']),
+                                     bert_lr=float(self._config._sections['Optimizer']['bert_learning_rate']),
+                                     num_train_steps=self.max_steps,
+                                     num_warmup_steps=self.warm_up_steps,
+                                     use_tpu=False)
+        else:
+          with tf.variable_scope('layer-{}'.format(n_layer)):
+            adam = AdamOptimizer(config=self._config)
+            adam_op = adam.minimize(loss + regularization_loss, \
+                                  variables=tf.trainable_variables(scope=self.classname)) # returns the current step
+            adam_optimizers.append(adam)
+        # not save the op for last layer, leave it with accuracies
+        if n_layer < len(train_outputs.losses_by_layer)-1:
+          adam_ops.append(adam_op)
 
-    dev_tensors = dev_outputs.accuracies
+      adam_train_tensors = [adam_op, train_outputs.accuracies]
 
-    # I think this needs to come after the optimizers
-    if self.save_model_after_improvement or self.save_model_after_training:
-      all_variables = set(tf.global_variables(scope=self.classname))
-      non_save_variables = set(tf.get_collection('non_save_variables'))
-      save_variables = all_variables - non_save_variables
-      saver = tf.train.Saver(list(save_variables), max_to_keep=1)
+      if self.switch_optimizers:
+        amsgrad_ops = []
+        for n_layer, loss in enumerate(train_outputs.losses_by_layer):
+          with tf.variable_scope('layer-{}'.format(n_layer)):
+            amsgrad = AMSGradOptimizer.from_optimizer(adam_optimizers[n_layer])
+            amsgrad_op = amsgrad.minimize(train_outputs.loss + regularization_loss, \
+                                        variables=tf.trainable_variables(scope=self.classname)) # returns the current step
+          if n_layer < len(train_outputs.losses_by_layer)-1:
+            amsgrad_ops.append(amsgrad_op)
+        amsgrad_train_tensors = [amsgrad_op, train_outputs.accuracies]
 
-    screen_output = []
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    config.allow_soft_placement = True
-    with tf.Session(config=config) as sess:
-      for saver, path in zip(input_network_savers, input_network_paths):
-        saver.restore(sess, path)
+      dev_tensors = dev_outputs.accuracies
 
-      feed_dict = {}
-      if self.use_elmo:
-        feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
-      if self.use_pretrained:
-        feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.pretrained_vocabs[0].embeddings
-      sess.run(tf.global_variables_initializer(), feed_dict=feed_dict)
+      # I think this needs to come after the optimizers
+      if self.save_model_after_improvement or self.save_model_after_training:
+        all_variables = set(tf.global_variables(scope=self.classname))
+        non_save_variables = set(tf.get_collection('non_save_variables'))
+        save_variables = all_variables - non_save_variables
+        saver = tf.train.Saver(list(save_variables), max_to_keep=1)
 
-      for vocab in self.input_vocabs:
-        if 'BERT' in vocab.classname:
-          with Timer('Restoring BERT pretrained ckpt'):
-            bert_scope_name = self.classname + '/Embeddings/' + vocab.classname
-            bert_variables = [v for v in tf.global_variables(scope=bert_scope_name) if 'bert' in v.name and 'adam' not in v.name]
-            bert_saver = tf.train.Saver({v.name[len(bert_scope_name) + 1:].rsplit(':', maxsplit=1)[0]: v for v in bert_variables})
-            bert_saver.restore(sess, vocab.pretrained_ckpt)
+      screen_output = []
+      config = tf.ConfigProto()
+      config.gpu_options.allow_growth = True
+      config.allow_soft_placement = True
+      with tf.Session(config=config) as sess:
+        for saver, path in zip(input_network_savers, input_network_paths):
+          saver.restore(sess, path)
 
-      #---
-      os.makedirs(os.path.join(self.save_dir, 'profile'))
-      options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-      run_metadata = tf.RunMetadata()
-      #---
-      if not noscreen:
-        print ("Removed")
-        exit(1)
+        feed_dict = {}
+        if self.use_elmo:
+          feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
+        if self.use_pretrained:
+          feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.pretrained_vocabs[0].embeddings
+        sess.run(tf.global_variables_initializer(), feed_dict=feed_dict)
 
-      self.feed_loss_weight = False
-      if hasattr(self, 'n_steps_change_loss_weight') and self.n_steps_change_loss_weight > 0:
-        #print (self.n_steps_change_loss_weight)
-        self.feed_loss_weight = True
-        self.main_loss_layer_id = 0
-        assert hasattr(self, 'n_layers')
-        assert hasattr(self, 'main_loss_weight')
-        assert hasattr(self, 'aux_loss_weight')
-        self._loss_weights = [self.aux_loss_weight] * self.n_layers
-        self._loss_weights[self.main_loss_layer_id] = self.main_loss_weight
-      current_optimizer = 'Adam'
-      train_tensors = adam_train_tensors
-      current_step = 0
-      print('\t', end='')
-      print('{}\n'.format(self.save_dir), end='')
-      print('\t', end='')
-      print('GPU: {}\n'.format(self.cuda_visible_devices), end='')
-      try:
-        current_epoch = 0
-        best_accuracy = 0
-        current_accuracy = 0
-        steps_since_best = 0
-        while (not self.max_steps or current_step < self.max_steps) and \
-              (not self.max_steps_without_improvement or steps_since_best < self.max_steps_without_improvement) and \
-              (not self.n_passes or current_epoch < len(trainset.conllu_files)*self.n_passes):
-          if steps_since_best >= 1 and self.switch_optimizers and current_optimizer != 'AMSGrad':
-            train_tensors = amsgrad_train_tensors
-            current_optimizer = 'AMSGrad'
-            print('\t', end='')
-            print('Current optimizer: {}\n'.format(current_optimizer), end='')
-          for batch in trainset.batch_iterator(shuffle=True):
-            train_outputs.restart_timer()
-            start_time = time.time()
-            feed_dict = trainset.set_placeholders(batch)
-            if self.feed_loss_weight:
-              # add loss weight to feed_dict
-              feed_dict[self.loss_weights] = self._loss_weights
-              # if reach change point, change loss weights
-              if (current_step + 1) % self.n_steps_change_loss_weight == 0:
-                self.main_loss_layer_id = (self.main_loss_layer_id + 1) % self.n_layers
-                self._loss_weights = [self.aux_loss_weight] * self.n_layers
-                self._loss_weights[self.main_loss_layer_id] = self.main_loss_weight
-                print ('Change loss weights to {}\n'.format(self._loss_weights))
-            #---
-            if current_step < 1:
-              _, train_scores = sess.run(train_tensors, feed_dict=feed_dict, options=options, run_metadata=run_metadata)
-              fetched_timeline = timeline.Timeline(run_metadata.step_stats)
-              chrome_trace = fetched_timeline.generate_chrome_trace_format()
-              with open(os.path.join(self.save_dir, 'profile', 'timeline_step_%d.json' % current_step), 'w') as f:
-                f.write(chrome_trace)
-            else:
-              _, train_scores = sess.run(train_tensors, feed_dict=feed_dict)
-            #---
-            train_outputs.update_history(train_scores)
-            current_step += 1
-            if current_step % self.print_every == 0:
-              for batch in devset.batch_iterator(shuffle=False):
-                dev_outputs.restart_timer()
-                feed_dict = devset.set_placeholders(batch)
-                dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
-                dev_outputs.update_history(dev_scores)
-              current_accuracy *= .5
-              current_accuracy += .5*dev_outputs.get_current_accuracy()
-              if current_accuracy >= best_accuracy:
-                steps_since_best = 0
-                best_accuracy = current_accuracy
-                if self.save_model_after_improvement:
-                  saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
+        for vocab in self.input_vocabs:
+          if 'BERT' in vocab.classname:
+            with Timer('Restoring BERT pretrained ckpt'):
+              bert_scope_name = self.classname + '/Embeddings/' + vocab.classname
+              bert_variables = [v for v in tf.global_variables(scope=bert_scope_name) if 'bert' in v.name and 'adam' not in v.name]
+              bert_saver = tf.train.Saver({v.name[len(bert_scope_name) + 1:].rsplit(':', maxsplit=1)[0]: v for v in bert_variables})
+              bert_saver.restore(sess, vocab.pretrained_ckpt)
+
+        #---
+        os.makedirs(os.path.join(self.save_dir, 'profile'))
+        options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        run_metadata = tf.RunMetadata()
+        #---
+        if not noscreen:
+          print ("Removed")
+          exit(1)
+
+        self.feed_loss_weight = False
+        if hasattr(self, 'n_steps_change_loss_weight') and self.n_steps_change_loss_weight > 0:
+          #print (self.n_steps_change_loss_weight)
+          self.feed_loss_weight = True
+          self.main_loss_layer_id = 0
+          assert hasattr(self, 'n_layers')
+          assert hasattr(self, 'main_loss_weight')
+          assert hasattr(self, 'aux_loss_weight')
+          self._loss_weights = [self.aux_loss_weight] * self.n_layers
+          self._loss_weights[self.main_loss_layer_id] = self.main_loss_weight
+        current_optimizer = 'Adam'
+        train_ops = adam_ops
+        train_tensors = adam_train_tensors
+        current_step = 0
+        print('\t', end='')
+        print('{}\n'.format(self.save_dir), end='')
+        print('\t', end='')
+        print('GPU: {}\n'.format(self.cuda_visible_devices), end='')
+        try:
+          current_epoch = 0
+          best_accuracy = 0
+          current_accuracy = 0
+          steps_since_best = 0
+          while (not self.max_steps or current_step < self.max_steps) and \
+                (not self.max_steps_without_improvement or steps_since_best < self.max_steps_without_improvement) and \
+                (not self.n_passes or current_epoch < len(trainset.conllu_files)*self.n_passes):
+            if steps_since_best >= 1 and self.switch_optimizers and current_optimizer != 'AMSGrad':
+              train_ops = amsgrad_ops
+              train_tensors = amsgrad_train_tensors
+              current_optimizer = 'AMSGrad'
+              print('\t', end='')
+              print('Current optimizer: {}\n'.format(current_optimizer), end='')
+            for batch in trainset.batch_iterator(shuffle=True):
+              train_outputs.restart_timer()
+              start_time = time.time()
+              feed_dict = trainset.set_placeholders(batch)
+              if self.feed_loss_weight:
+                # add loss weight to feed_dict
+                feed_dict[self.loss_weights] = self._loss_weights
+                # if reach change point, change loss weights
+                if (current_step + 1) % self.n_steps_change_loss_weight == 0:
+                  self.main_loss_layer_id = (self.main_loss_layer_id + 1) % self.n_layers
+                  self._loss_weights = [self.aux_loss_weight] * self.n_layers
+                  self._loss_weights[self.main_loss_layer_id] = self.main_loss_weight
+                  print ('Change loss weights to {}\n'.format(self._loss_weights))
+              #---
+              if current_step < 1:
+                # update the first to n-1 layer
+                for n_layer, train_op in enumerate(train_ops):
+                  #print ('Updating loss of layer-{}'.format(n_layer))
+                  _ = sess.run(train_op, feed_dict=feed_dict, options=options)
+                # update the last layer and get the scores
+                _, train_scores = sess.run(train_tensors, feed_dict=feed_dict, options=options, run_metadata=run_metadata)
+                fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+                chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                with open(os.path.join(self.save_dir, 'profile', 'timeline_step_%d.json' % current_step), 'w') as f:
+                  f.write(chrome_trace)
               else:
-                steps_since_best += self.print_every
-              current_epoch = sess.run(self.global_step)
-              print('\t', end='')
-              print('Epoch: {:3d}'.format(int(current_epoch)), end='')
-              print(' | ', end='')
-              print('Step: {:5d}\n'.format(int(current_step)), end='')
-              print('\t', end='')
-              print('Moving acc: {:5.2f}'.format(current_accuracy), end='')
-              print(' | ', end='')
-              print('Best moving acc: {:5.2f}\n'.format(best_accuracy), end='')
-              print('\t', end='')
-              print('Steps since improvement: {:4d}\n'.format(int(steps_since_best)), end='')
-              train_outputs.print_recent_history()
-              dev_outputs.print_recent_history()
-          current_epoch = sess.run(self.global_step)
-          sess.run(update_step)
-          trainset.load_next()
-        with open(os.path.join(self.save_dir, 'SUCCESS'), 'w') as f:
+                # update the first to n-1 layer
+                for n_layer, train_op in enumerate(train_ops):
+                  #print ('Updating loss of layer-{}'.format(n_layer))
+                  _ = sess.run(train_op, feed_dict=feed_dict, options=options)
+                # update the last layer and get the scores
+                _, train_scores = sess.run(train_tensors, feed_dict=feed_dict)
+              #---
+              train_outputs.update_history(train_scores)
+              current_step += 1
+              if current_step % self.print_every == 0:
+                for batch in devset.batch_iterator(shuffle=False):
+                  dev_outputs.restart_timer()
+                  feed_dict = devset.set_placeholders(batch)
+                  dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
+                  dev_outputs.update_history(dev_scores, show=True)
+                current_accuracy *= .5
+                current_accuracy += .5*dev_outputs.get_current_accuracy()
+                if current_accuracy >= best_accuracy:
+                  steps_since_best = 0
+                  best_accuracy = current_accuracy
+                  if self.save_model_after_improvement:
+                    saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
+                else:
+                  steps_since_best += self.print_every
+                current_epoch = sess.run(self.global_step)
+                print('\t', end='')
+                print('Epoch: {:3d}'.format(int(current_epoch)), end='')
+                print(' | ', end='')
+                print('Step: {:5d}\n'.format(int(current_step)), end='')
+                print('\t', end='')
+                print('Moving acc: {:5.2f}'.format(current_accuracy), end='')
+                print(' | ', end='')
+                print('Best moving acc: {:5.2f}\n'.format(best_accuracy), end='')
+                print('\t', end='')
+                print('Steps since improvement: {:4d}\n'.format(int(steps_since_best)), end='')
+                train_outputs.print_recent_history()
+                dev_outputs.print_recent_history()
+            current_epoch = sess.run(self.global_step)
+            sess.run(update_step)
+            trainset.load_next()
+          with open(os.path.join(self.save_dir, 'SUCCESS'), 'w') as f:
+            pass
+        except KeyboardInterrupt:
           pass
-      except KeyboardInterrupt:
-        pass
-      if self.save_model_after_training:
-        saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
+        if self.save_model_after_training:
+          saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
+
+    else:
+      if self.use_bert_adam:
+        adam_op = create_optimizer(loss=train_outputs.loss + regularization_loss,
+                                   init_lr=float(self._config._sections['Optimizer']['learning_rate']),
+                                   bert_lr=float(self._config._sections['Optimizer']['bert_learning_rate']),
+                                   num_train_steps=self.max_steps,
+                                   num_warmup_steps=self.warm_up_steps,
+                                   use_tpu=False)
+      else:
+        adam = AdamOptimizer(config=self._config)
+        adam_op = adam.minimize(train_outputs.loss + regularization_loss, \
+                                variables=tf.trainable_variables(scope=self.classname)) # returns the current step
+      adam_train_tensors = [adam_op, train_outputs.accuracies]
+
+      if self.switch_optimizers:
+        amsgrad = AMSGradOptimizer.from_optimizer(adam)
+        amsgrad_op = amsgrad.minimize(train_outputs.loss + regularization_loss, \
+                                      variables=tf.trainable_variables(scope=self.classname)) # returns the current step
+        amsgrad_train_tensors = [amsgrad_op, train_outputs.accuracies]
+
+      dev_tensors = dev_outputs.accuracies
+
+      # I think this needs to come after the optimizers
+      if self.save_model_after_improvement or self.save_model_after_training:
+        all_variables = set(tf.global_variables(scope=self.classname))
+        non_save_variables = set(tf.get_collection('non_save_variables'))
+        save_variables = all_variables - non_save_variables
+        saver = tf.train.Saver(list(save_variables), max_to_keep=1)
+
+      screen_output = []
+      config = tf.ConfigProto()
+      config.gpu_options.allow_growth = True
+      config.allow_soft_placement = True
+      with tf.Session(config=config) as sess:
+        for saver, path in zip(input_network_savers, input_network_paths):
+          saver.restore(sess, path)
+
+        feed_dict = {}
+        if self.use_elmo:
+          feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
+        if self.use_pretrained:
+          feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.pretrained_vocabs[0].embeddings
+        sess.run(tf.global_variables_initializer(), feed_dict=feed_dict)
+
+        for vocab in self.input_vocabs:
+          if 'BERT' in vocab.classname:
+            with Timer('Restoring BERT pretrained ckpt'):
+              bert_scope_name = self.classname + '/Embeddings/' + vocab.classname
+              bert_variables = [v for v in tf.global_variables(scope=bert_scope_name) if 'bert' in v.name and 'adam' not in v.name]
+              bert_saver = tf.train.Saver({v.name[len(bert_scope_name) + 1:].rsplit(':', maxsplit=1)[0]: v for v in bert_variables})
+              bert_saver.restore(sess, vocab.pretrained_ckpt)
+
+        #---
+        os.makedirs(os.path.join(self.save_dir, 'profile'))
+        options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        run_metadata = tf.RunMetadata()
+        #---
+        if not noscreen:
+          print ("Removed")
+          exit(1)
+
+        self.feed_loss_weight = False
+        if hasattr(self, 'n_steps_change_loss_weight') and self.n_steps_change_loss_weight > 0:
+          #print (self.n_steps_change_loss_weight)
+          self.feed_loss_weight = True
+          self.main_loss_layer_id = 0
+          assert hasattr(self, 'n_layers')
+          assert hasattr(self, 'main_loss_weight')
+          assert hasattr(self, 'aux_loss_weight')
+          self._loss_weights = [self.aux_loss_weight] * self.n_layers
+          self._loss_weights[self.main_loss_layer_id] = self.main_loss_weight
+        current_optimizer = 'Adam'
+        train_tensors = adam_train_tensors
+        current_step = 0
+        print('\t', end='')
+        print('{}\n'.format(self.save_dir), end='')
+        print('\t', end='')
+        print('GPU: {}\n'.format(self.cuda_visible_devices), end='')
+        try:
+          current_epoch = 0
+          best_accuracy = 0
+          current_accuracy = 0
+          steps_since_best = 0
+          while (not self.max_steps or current_step < self.max_steps) and \
+                (not self.max_steps_without_improvement or steps_since_best < self.max_steps_without_improvement) and \
+                (not self.n_passes or current_epoch < len(trainset.conllu_files)*self.n_passes):
+            if steps_since_best >= 1 and self.switch_optimizers and current_optimizer != 'AMSGrad':
+              train_tensors = amsgrad_train_tensors
+              current_optimizer = 'AMSGrad'
+              print('\t', end='')
+              print('Current optimizer: {}\n'.format(current_optimizer), end='')
+            for batch in trainset.batch_iterator(shuffle=True):
+              train_outputs.restart_timer()
+              start_time = time.time()
+              feed_dict = trainset.set_placeholders(batch)
+              if self.feed_loss_weight:
+                # add loss weight to feed_dict
+                feed_dict[self.loss_weights] = self._loss_weights
+                # if reach change point, change loss weights
+                if (current_step + 1) % self.n_steps_change_loss_weight == 0:
+                  self.main_loss_layer_id = (self.main_loss_layer_id + 1) % self.n_layers
+                  self._loss_weights = [self.aux_loss_weight] * self.n_layers
+                  self._loss_weights[self.main_loss_layer_id] = self.main_loss_weight
+                  print ('Change loss weights to {}\n'.format(self._loss_weights))
+              #---
+              if current_step < 1:
+                _, train_scores = sess.run(train_tensors, feed_dict=feed_dict, options=options, run_metadata=run_metadata)
+                fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+                chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                with open(os.path.join(self.save_dir, 'profile', 'timeline_step_%d.json' % current_step), 'w') as f:
+                  f.write(chrome_trace)
+              else:
+                _, train_scores = sess.run(train_tensors, feed_dict=feed_dict)
+              #---
+              train_outputs.update_history(train_scores)
+              current_step += 1
+              if current_step % self.print_every == 0:
+                for batch in devset.batch_iterator(shuffle=False):
+                  dev_outputs.restart_timer()
+                  feed_dict = devset.set_placeholders(batch)
+                  dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
+                  dev_outputs.update_history(dev_scores)
+                current_accuracy *= .5
+                current_accuracy += .5*dev_outputs.get_current_accuracy()
+                if current_accuracy >= best_accuracy:
+                  steps_since_best = 0
+                  best_accuracy = current_accuracy
+                  if self.save_model_after_improvement:
+                    saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
+                else:
+                  steps_since_best += self.print_every
+                current_epoch = sess.run(self.global_step)
+                print('\t', end='')
+                print('Epoch: {:3d}'.format(int(current_epoch)), end='')
+                print(' | ', end='')
+                print('Step: {:5d}\n'.format(int(current_step)), end='')
+                print('\t', end='')
+                print('Moving acc: {:5.2f}'.format(current_accuracy), end='')
+                print(' | ', end='')
+                print('Best moving acc: {:5.2f}\n'.format(best_accuracy), end='')
+                print('\t', end='')
+                print('Steps since improvement: {:4d}\n'.format(int(steps_since_best)), end='')
+                train_outputs.print_recent_history()
+                dev_outputs.print_recent_history()
+            current_epoch = sess.run(self.global_step)
+            sess.run(update_step)
+            trainset.load_next()
+          with open(os.path.join(self.save_dir, 'SUCCESS'), 'w') as f:
+            pass
+        except KeyboardInterrupt:
+          pass
+        if self.save_model_after_training:
+          saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
     return
 
   #=============================================================

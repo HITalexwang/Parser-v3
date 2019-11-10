@@ -75,6 +75,16 @@ class GraphOutputs(object):
       if 'acc' in self._evals:
         self._evals.remove('acc')
 
+    self._losses_by_layer = []
+    if 'semgraph' in outputs:
+      if 'losses_by_layer' in outputs['semgraph'] and 'label_loss' in outputs['semgraph']:
+        rho = self.loss_interpolation
+        labeled_loss = outputs['semgraph']['label_loss']
+        for layer_idx, unlabeled_loss in enumerate(outputs['semgraph']['losses_by_layer']):
+          with tf.variable_scope("loss_of_layer_%d" % layer_idx):
+            loss = 2*((1-rho) * unlabeled_loss + rho * labeled_loss)
+            self._losses_by_layer.append(loss)
+
     for eval_ in list(self._evals):
       assert eval_ in valid_evals
     self._loss = tf.add_n([tf.where(tf.is_finite(output['loss']), output['loss'], 0.) for output in outputs.values()])
@@ -491,12 +501,15 @@ class GraphOutputs(object):
     return
   
   #=============================================================
-  def update_history(self, outputs):
+  def update_history(self, outputs, show=False):
     """"""
     #print ('remained heads:\n',outputs['semgraph']['allowed_heads'])
     #print ('used heads(y):\n',outputs['semgraph']['used_heads'])
-    #print ('pred by layers:\n',outputs['semgraph']['preds_by_layer'])
-    #print ('sumed preds:\n',outputs['semgraph']['predictions'])
+    if show:
+      print ('remained heads:\n',outputs['semgraph']['allowed_heads'])
+      print ('used heads(y):\n',outputs['semgraph']['used_heads'])
+      print ('pred by layers:\n',outputs['semgraph']['preds_by_layer'])
+      print ('sumed preds:\n',outputs['semgraph']['predictions'])
 
     self.history['total']['total_time'] += time.time() - self.time
     self.time = None
@@ -724,6 +737,13 @@ class GraphOutputs(object):
   @property
   def decoder(self):
     return self._config.getstr(self, 'decoder')
+  @property
+  def loss_interpolation(self):
+    return self._config.getfloat(self, 'loss_interpolation')
+  @property
+  def losses_by_layer(self):
+    return self._losses_by_layer
+
 
 #***************************************************************
 class TrainOutputs(GraphOutputs):

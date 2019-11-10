@@ -756,7 +756,7 @@ def attention_layer(from_tensor,
                                           remained_unlabeled_targets, attention_scores, 
                                           attention_mask, null_mask, 
                                           num_sup_heads, num_attention_heads,
-                                          n_top_heads)
+                                          n_top_heads, policy='random', smoothing_rate=smoothing_rate)
     outputs['acc_loss'] = tf.add_n(losses)
     outputs['predictions'] = predictions
     outputs['probabilities'] = probabilities
@@ -821,7 +821,8 @@ def attention_layer(from_tensor,
   return context_layer, outputs
 
 def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_mask, null_mask, 
-                      num_sup_heads=1, num_attention_heads=8, n_top_heads=4, policy = 'random'):
+                      num_sup_heads=1, num_attention_heads=8, n_top_heads=4, policy='random',
+                      smoothing_rate=0.1):
   """
   remained_unlabeled_targets: [B, F, T], the arcs that have not been generated yet
   attention_scores: [B, N, F, T], N attention heads
@@ -879,7 +880,8 @@ def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_
     predictions.append(prediction)
 
     # [B, F, T], expand the selected heads to 3D
-    one_hot_probs = tf.one_hot(selected_gold_heads, to_seq_length, on_value=1.0, off_value=0.0, axis=-1)
+    one_hot_probs = tf.one_hot(selected_gold_heads, to_seq_length, on_value=1.0-smoothing_rate, 
+                                off_value=0.0+smoothing_rate, axis=-1)
     supervised_probs.append(one_hot_probs)
 
   # Normalize the attention scores to probabilities.
@@ -1085,8 +1087,8 @@ def easy_first_transformer_model(input_tensor,
 
   for layer_idx in range(num_hidden_layers):
     #print ('layer_id:{}'.format(layer_idx))
-    #with tf.variable_scope("layer_%d" % layer_idx):
-    with tf.variable_scope("block", reuse=tf.AUTO_REUSE):
+    with tf.variable_scope("layer_%d" % layer_idx):
+    #with tf.variable_scope("block", reuse=tf.AUTO_REUSE):
       layer_input = prev_output
 
       with tf.variable_scope("attention"):
