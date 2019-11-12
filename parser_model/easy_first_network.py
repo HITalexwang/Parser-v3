@@ -29,7 +29,6 @@ import codecs
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.client import timeline
 
 from debug.timer import Timer
 
@@ -345,9 +344,9 @@ class EasyFirstNetwork(BaseNetwork):
               bert_saver.restore(sess, vocab.pretrained_ckpt)
 
         #---
-        os.makedirs(os.path.join(self.save_dir, 'profile'))
-        options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-        run_metadata = tf.RunMetadata()
+        #os.makedirs(os.path.join(self.save_dir, 'profile'))
+        #options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        #run_metadata = tf.RunMetadata()
         #---
         if not noscreen:
           print ("Removed")
@@ -399,7 +398,8 @@ class EasyFirstNetwork(BaseNetwork):
                   self._loss_weights[self.main_loss_layer_id] = self.main_loss_weight
                   print ('Change loss weights to {}\n'.format(self._loss_weights))
               #---
-              if current_step < 1:
+              """
+              if current_step < 0:
                 # update the first to n-1 layer
                 for n_layer, train_op in enumerate(train_ops):
                   #print ('Updating loss of layer-{}'.format(n_layer))
@@ -411,10 +411,12 @@ class EasyFirstNetwork(BaseNetwork):
                 with open(os.path.join(self.save_dir, 'profile', 'timeline_step_%d.json' % current_step), 'w') as f:
                   f.write(chrome_trace)
               else:
-                # update the first to n-1 layer
-                for n_layer, train_op in enumerate(train_ops):
-                  #print ('Updating loss of layer-{}'.format(n_layer))
-                  _ = sess.run(train_op, feed_dict=feed_dict, options=options)
+              """
+              # update the first to n-1 layer
+              for n_layer, train_op in enumerate(train_ops):
+                #print ('Updating loss of layer-{}'.format(n_layer))
+                #_ = sess.run(train_op, feed_dict=feed_dict, options=options)
+                _ = sess.run(train_op, feed_dict=feed_dict)
                 # update the last layer and get the scores
                 _, train_scores = sess.run(train_tensors, feed_dict=feed_dict)
               #---
@@ -511,9 +513,9 @@ class EasyFirstNetwork(BaseNetwork):
               bert_saver.restore(sess, vocab.pretrained_ckpt)
 
         #---
-        os.makedirs(os.path.join(self.save_dir, 'profile'))
-        options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-        run_metadata = tf.RunMetadata()
+        #os.makedirs(os.path.join(self.save_dir, 'profile'))
+        #options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        #run_metadata = tf.RunMetadata()
         #---
         if not noscreen:
           print ("Removed")
@@ -563,14 +565,7 @@ class EasyFirstNetwork(BaseNetwork):
                   self._loss_weights[self.main_loss_layer_id] = self.main_loss_weight
                   print ('Change loss weights to {}\n'.format(self._loss_weights))
               #---
-              if current_step < 1:
-                _, train_scores = sess.run(train_tensors, feed_dict=feed_dict, options=options, run_metadata=run_metadata)
-                fetched_timeline = timeline.Timeline(run_metadata.step_stats)
-                chrome_trace = fetched_timeline.generate_chrome_trace_format()
-                with open(os.path.join(self.save_dir, 'profile', 'timeline_step_%d.json' % current_step), 'w') as f:
-                  f.write(chrome_trace)
-              else:
-                _, train_scores = sess.run(train_tensors, feed_dict=feed_dict)
+              _, train_scores = sess.run(train_tensors, feed_dict=feed_dict)
               #---
               train_outputs.update_history(train_scores)
               current_step += 1

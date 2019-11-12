@@ -303,11 +303,17 @@ class GraphOutputs(object):
         for i, heads in enumerate(head_indices):
           for j, head in enumerate(heads):
             if head > 0:
-              # substract the index of null token, so null token == -1
-              sparse_semgraph_preds[i][j].append((head-1,semrel_preds[i,j,head]))
+              head_exists = False
+              # do not add duplicate arc
+              for h_, s in sparse_semgraph_preds[i][j]:
+                if h_ == head-1:
+                  head_exists = True
+                  break
+              if not head_exists:
+                # substract the index of null token, so null token == -1
+                sparse_semgraph_preds[i][j].append((head-1,semrel_preds[i,j,head]))
     #print (sparse_semgraph_preds)
     return sparse_semgraph_preds
-
 
   def augment_head_with_acc(self, semhead_preds, acc_probs, n_layers=[1]):
     """
