@@ -176,6 +176,7 @@ class EasyFirstTransformer(object):
         is invalid.
     """
     config = copy.deepcopy(config)
+    config.is_training = is_training
     if not is_training:
       config.hidden_dropout_prob = 0.0
       config.attention_probs_dropout_prob = 0.0
@@ -273,7 +274,7 @@ class EasyFirstTransformer(object):
     outputs['preds_by_layer'] = outputs['predictions']
     outputs['predictions'] = predictions
     # there might be better way ?
-    outputs['probabilities'] = tf.to_float(predictions)
+    #outputs['probabilities'] = tf.to_float(predictions)
 
     targets = outputs['unlabeled_targets']
     # [B, F, T] * [B, F, T] -> [B, F, T]
@@ -764,6 +765,7 @@ def attention_layer(from_tensor,
     # predictions: S * [B, F]
     # graph_context_layer: [B, F, n*h]
     losses, predictions, probabilities, graph_context_layer, used_heads, allowed_heads = easy_first_one_step(
+                                          config,
                                           remained_unlabeled_targets, from_tensor_2d,
                                           to_tensor_2d, attention_mask, null_mask, batch_size,
                                           from_seq_length, to_seq_length, use_biaffine=config.use_biaffine,
@@ -818,7 +820,7 @@ def attention_layer(from_tensor,
 
   return context_layer, outputs
 
-def easy_first_one_step(remained_unlabeled_targets, from_tensor_2d, to_tensor_2d,
+def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_tensor_2d,
                       attention_mask, null_mask, batch_size, from_seq_length, 
                       to_seq_length, use_biaffine=False, 
                       arc_hidden_size=512, rel_hidden_size=512,
@@ -916,7 +918,8 @@ def easy_first_one_step(remained_unlabeled_targets, from_tensor_2d, to_tensor_2d
   for i in range(num_sup_heads):
     # [B, F, T]
     supervised_logits = attention_scores[:,i,:,:]
-    probabilities.append(tf.nn.softmax(supervised_logits))
+    probability = tf.nn.softmax(supervised_logits) * tf.to_float(attention_mask)
+    probabilities.append(probability)
     disallowed_adder = (1.0 - tf.cast(allowed_heads, tf.float32)) * -10000.0
     # [B, F, T], scores for allowed dep heads (including NULL)
     allowed_scores = supervised_logits + disallowed_adder
@@ -945,13 +948,17 @@ def easy_first_one_step(remained_unlabeled_targets, from_tensor_2d, to_tensor_2d
     prediction = tf.argmax(supervised_logits, axis=-1, output_type=tf.int32)
     predictions.append(prediction)
 
-    # [B, F, T], expand the selected heads to 3D
-    # arc entry = 1 - smoothing_rate, other entry = smoothing_rate
-    one_hot_probs = tf.one_hot(selected_gold_heads, to_seq_length, on_value=1.0-smoothing_rate, 
+    if config.is_training:
+      # [B, F, T], expand the selected heads to 3D
+      # arc entry = 1 - smoothing_rate, other entry = smoothing_rate
+      one_hot_probs = tf.one_hot(selected_gold_heads, to_seq_length, on_value=1.0-smoothing_rate, 
                                 off_value=0.0+smoothing_rate, axis=-1)
-    #eyes = tf.eye(to_seq_length)
-    #augmented_probs = one_hot_probs * (1-eyes) + eyes
-    supervised_probs.append(one_hot_probs)
+      #eyes = tf.eye(to_seq_length)
+      #augmented_probs = one_hot_probs * (1-eyes) + eyes
+      supervised_probs.append(one_hot_probs)
+    else:
+      # probability: [B, F, T]
+      supervised_probs.append(probability)
 
   if num_sup_heads == 1:
     # [B, F, T] -> [B, 1, F, T]

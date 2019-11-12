@@ -92,6 +92,8 @@ class GraphOutputs(object):
     #-----------------------------------------------------------
     for field in outputs:
       self._probabilities[field] = outputs[field].pop('probabilities')
+      if 'unlabeled_probabilities' in outputs[field]:
+        self._probabilities['semhead'] = outputs[field].pop('unlabeled_probabilities')
       self._accuracies[field] = outputs[field]
 
     #-----------------------------------------------------------
@@ -249,6 +251,11 @@ class GraphOutputs(object):
       if self._factored_semgraph and self.decoder == 'sem16':
         #print ('### Decoder:sem16 ###')
         semgraph_preds = self.sem16decoder(semgraph_probs, lengths)
+      elif self._factored_semgraph and self.decoder == 'easy-first':
+        assert 'semhead' in probabilities
+        predictions['semrel'] = self.easyfirst_decoder(probabilities['semhead'], semgraph_probs, lengths)
+        predictions['semhead'] = []
+        return predictions
       elif self._factored_semgraph:
         # (n x m x m x c) -> (n x m x m)
         semhead_probs = semgraph_probs.sum(axis=-1)
@@ -273,6 +280,34 @@ class GraphOutputs(object):
             if pred:
               sparse_semgraph_preds[-1][-1].append((k, semgraph_preds[i,j,k]))
     return predictions
+
+  def easyfirst_decoder(self, semhead_probs, semrel_probs, lengths):
+    #print (len(semhead_probs), len(semhead_probs[0]), semhead_probs[0][0].shape)
+    #print (semrel_probs.shape)
+
+    # (n x m x m x c) -> (n x m x m)
+    semrel_preds = np.argmax(semrel_probs, axis=-1)[:,1:,:]
+    # remove the null token
+    seq_len = semrel_preds.shape[-1] - 1
+    sparse_semgraph_preds = [[[] for _ in range(seq_len)] 
+                                  for _ in range(semrel_preds.shape[0])]
+    # collect heads from each layer and each attention head
+    # for each attention layer
+    for n_layer, headprobs in enumerate(semhead_probs):
+      # for each attention head
+      for h, probs in enumerate(headprobs):
+        # remove the null token and root token at 0 and 1
+        head_indices = np.argmax(probs, axis=-1)[:,1:]
+        #print (head_indices)
+        # the i-th sentence in the batch
+        for i, heads in enumerate(head_indices):
+          for j, head in enumerate(heads):
+            if head > 0:
+              # substract the index of null token, so null token == -1
+              sparse_semgraph_preds[i][j].append((head-1,semrel_preds[i,j,head]))
+    #print (sparse_semgraph_preds)
+    return sparse_semgraph_preds
+
 
   def augment_head_with_acc(self, semhead_preds, acc_probs, n_layers=[1]):
     """

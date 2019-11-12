@@ -193,7 +193,10 @@ class EasyFirstNetwork(BaseNetwork):
     
     unlabeled_outputs = {}
     unlabeled_outputs['unlabeled_targets'] = output_fields['semhead'].placeholder
-    unlabeled_outputs['probabilities'] = acc_outputs['probabilities']
+    #unlabeled_outputs['probabilities'] = acc_outputs['probabilities']
+    # [batch_size, seq_len, seq_len], for input of rel classifier to calculate the final probability
+    # probabilities = label_probabilities * head_probabilities
+    unlabeled_outputs['probabilities'] = tf.ones_like(acc_outputs['probabilities'][0][0])
     unlabeled_outputs['unlabeled_loss'] = acc_outputs['acc_loss']
     unlabeled_outputs['loss'] = acc_outputs['acc_loss']
     
@@ -225,6 +228,7 @@ class EasyFirstNetwork(BaseNetwork):
     outputs['semgraph']['preds_by_layer'] = acc_outputs['preds_by_layer']
     outputs['semgraph']['allowed_heads'] = acc_outputs['allowed_heads']
     outputs['semgraph']['used_heads'] = acc_outputs['used_heads']
+    outputs['semgraph']['unlabeled_probabilities'] = acc_outputs['probabilities']
     return outputs, tokens
   
   #=============================================================
@@ -421,7 +425,7 @@ class EasyFirstNetwork(BaseNetwork):
                   dev_outputs.restart_timer()
                   feed_dict = devset.set_placeholders(batch)
                   dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
-                  dev_outputs.update_history(dev_scores, show=True)
+                  dev_outputs.update_history(dev_scores, show=False)
                 current_accuracy *= .5
                 current_accuracy += .5*dev_outputs.get_current_accuracy()
                 if current_accuracy >= best_accuracy:
@@ -608,6 +612,102 @@ class EasyFirstNetwork(BaseNetwork):
         if self.save_model_after_training:
           saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
     return
+
+  #=============================================================
+  def parse(self, conllu_files, output_dir=None, output_filename=None, augment_layers=None):
+    """"""
+
+    with Timer('Building dataset'):
+      parseset = conllu_dataset.CoNLLUDataset(conllu_files, self.vocabs,
+                                              config=self._config, add_null_token=True)
+
+    if output_filename:
+      assert len(conllu_files) == 1, "output_filename can only be specified for one input file"
+    factored_deptree = None
+    factored_semgraph = None
+    for vocab in self.output_vocabs:
+      if vocab.field == 'deprel':
+        factored_deptree = vocab.factorized
+      elif vocab.field == 'semrel':
+        factored_semgraph = vocab.factorized
+    with Timer('Building TF'):
+      with tf.variable_scope(self.classname, reuse=False):
+        parse_graph = self.build_graph(reuse=True)
+        parse_outputs = DevOutputs(*parse_graph, load=False, factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+      parse_tensors = parse_outputs.accuracies
+      all_variables = set(tf.global_variables())
+      non_save_variables = set(tf.get_collection('non_save_variables'))
+      save_variables = all_variables - non_save_variables
+      saver = tf.train.Saver(list(save_variables), max_to_keep=1)
+
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    config.allow_soft_placement = True
+    with tf.Session(config=config) as sess:
+      with Timer('Initializing non_save variables'):
+        #print(list(non_save_variables))
+        feed_dict = {}
+      if self.use_elmo:
+        feed_dict[self.elmo_vocabs[0].embed_placeholder] = self.elmo_vocabs[0].embeddings
+      if self.use_pretrained:
+        feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.pretrained_vocabs[0].embeddings
+      sess.run(tf.global_variables_initializer(), feed_dict=feed_dict)
+      with Timer('Restoring save variables'):
+        saver.restore(sess, tf.train.latest_checkpoint(self.save_dir))
+      if len(conllu_files) == 1 or output_filename is not None:
+        with Timer('Parsing file'):
+          if not self.other_save_dirs:
+            self.parse_file(parseset, parse_outputs, sess, output_dir=output_dir, 
+                            output_filename=output_filename, augment_layers=augment_layers)
+          else:
+            self.parse_file_ensemble(parseset, parse_outputs, sess, saver, output_dir=output_dir, output_filename=output_filename)
+      else:
+        with Timer('Parsing files'):
+          self.parse_files(parseset, parse_outputs, sess, output_dir=output_dir)
+    return
+
+  #=============================================================
+  def parse_file(self, dataset, graph_outputs, sess, output_dir=None, output_filename=None,
+                  print_time=True, augment_layers=None):
+    """"""
+
+    probability_tensors = graph_outputs.probabilities
+    input_filename = dataset.conllu_files[0]
+    graph_outputs.restart_timer()
+    for i, indices in enumerate(dataset.batch_iterator(shuffle=False)):
+      with Timer('Parsing batch %d' % i):
+        tokens, lengths = dataset.get_tokens(indices)
+        # remove the null token
+        for field in tokens:
+          for i in range(len(tokens[field])):
+            tokens[field][i] = tokens[field][i][1:]
+        lengths = lengths - 1
+        feed_dict = dataset.set_placeholders(indices)
+        probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
+        predictions = graph_outputs.probs_to_preds(probabilities, lengths, augment_layers=augment_layers)
+        tokens.update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
+        graph_outputs.cache_predictions(tokens, indices)
+
+    with Timer('Dumping predictions'):
+      if output_dir is None and output_filename is None:
+        graph_outputs.print_current_predictions()
+      else:
+        input_dir, input_filename = os.path.split(input_filename)
+        if output_dir is None:
+          output_dir = os.path.join(self.save_dir, 'parsed', input_dir)
+        elif output_filename is None:
+          output_filename = input_filename
+          output_filename = os.path.join(output_dir, output_filename)
+        
+        if not os.path.exists(output_dir):
+          os.makedirs(output_dir)
+        #output_filename = os.path.join(output_dir, output_filename)
+        with codecs.open(output_filename, 'w', encoding='utf-8') as f:
+          graph_outputs.dump_current_predictions(f)
+    if print_time:
+      print('\033[92mParsing 1 file took {:0.1f} seconds\033[0m'.format(time.time() - graph_outputs.time))
+    return
+
 
   #=============================================================
   @property
