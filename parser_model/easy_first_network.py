@@ -148,7 +148,14 @@ class EasyFirstNetwork(BaseNetwork):
                                                       smoothing_rate=self.smoothing_rate,
                                                       rm_prev_tp=self.rm_prev_tp,
                                                       num_sup_heads=self.n_supervised_attention_heads,
-                                                      n_top_heads=self.n_top_selected_depheads)
+                                                      n_top_heads=self.n_top_selected_depheads,
+                                                      use_biaffine=self.use_biaffine,
+                                                      arc_hidden_size=self.arc_hidden_size,
+                                                      arc_hidden_add_linear=self.arc_hidden_add_linear,
+                                                      arc_hidden_keep_prob=self.arc_hidden_keep_prob,
+                                                      rel_hidden_size=self.rel_hidden_size,
+                                                      rel_hidden_add_linear=self.rel_hidden_add_linear,
+                                                      rel_hidden_keep_prob=self.rel_hidden_keep_prob)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
@@ -660,4 +667,24 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def n_top_selected_depheads(self):
     return self._config.getint(self, 'n_top_selected_depheads')
-    
+  @property
+  def use_biaffine(self):
+    return self._config.getboolean(self, 'use_biaffine')
+  @property
+  def arc_hidden_size(self):
+    return self._config.getint(self, 'arc_hidden_size')
+  @property
+  def arc_hidden_add_linear(self):
+    return self._config.getboolean(self, 'arc_hidden_add_linear')
+  @property
+  def arc_hidden_keep_prob(self):
+    return self._config.getfloat(self, 'arc_hidden_keep_prob')
+  @property
+  def rel_hidden_size(self):
+    return self._config.getint(self, 'rel_hidden_size')
+  @property
+  def rel_hidden_add_linear(self):
+    return self._config.getboolean(self, 'rel_hidden_add_linear')
+  @property
+  def rel_hidden_keep_prob(self):
+    return self._config.getfloat(self, 'rel_hidden_keep_prob')

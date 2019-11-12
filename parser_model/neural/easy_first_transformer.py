@@ -26,8 +26,7 @@ import re
 import numpy as np
 import six
 import tensorflow as tf
-from parser_model.neural import nn
-
+from parser_model.neural import nn, classifiers, nonlin
 
 class EasyFirstTransformerConfig(object):
   """Configuration for `GraphTransformer`."""
@@ -47,7 +46,14 @@ class EasyFirstTransformerConfig(object):
                smoothing_rate=0,
                rm_prev_tp=False,
                num_sup_heads=1,
-               n_top_heads=4):
+               n_top_heads=4,
+               use_biaffine=True,
+               arc_hidden_size=512,
+               arc_hidden_add_linear=True,
+               arc_hidden_keep_prob=0.67,
+               rel_hidden_size=512,
+               rel_hidden_add_linear=True,
+               rel_hidden_keep_prob=0.67):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -87,8 +93,15 @@ class EasyFirstTransformerConfig(object):
     self.supervision = supervision
     self.smoothing_rate = smoothing_rate
     self.rm_prev_tp = rm_prev_tp
+
     self.num_sup_heads = num_sup_heads
     self.n_top_heads = n_top_heads
+    self.use_biaffine = use_biaffine
+    self.arc_hidden_size = arc_hidden_size
+    self.rel_hidden_size = rel_hidden_size
+    self.arc_hidden_add_linear = arc_hidden_add_linear
+    self.arc_hidden_keep_prob = arc_hidden_keep_prob
+
     assert supervision in ['easy-first', 'mask-bi', 'mask-uni', 'none', 'graph-bi', 'graph-uni']
 
   @classmethod
@@ -167,6 +180,7 @@ class EasyFirstTransformer(object):
       config.hidden_dropout_prob = 0.0
       config.attention_probs_dropout_prob = 0.0
       config.acc_mask_dropout_prob = 0.0
+      config.arc_hidden_keep_prob = 1.0
 
     input_shape = get_shape_list(input_tensor, expected_rank=3)
     batch_size = input_shape[0]
@@ -216,6 +230,7 @@ class EasyFirstTransformer(object):
         # Run the stacked transformer.
         # `sequence_output` shape = [batch_size, seq_length, hidden_size].
         self.all_encoder_layers, self.outputs = easy_first_transformer_model(
+            config=config,
             input_tensor=self.embedding_output,
             attention_mask=attention_mask,
             null_mask=null_mask,
@@ -230,10 +245,7 @@ class EasyFirstTransformer(object):
             acc_mask_dropout_prob=config.acc_mask_dropout_prob,
             initializer_range=config.initializer_range,
             do_return_all_layers=True,
-            supervision=config.supervision,
-            smoothing_rate=config.smoothing_rate,
-            num_sup_heads=config.num_sup_heads,
-            n_top_heads=config.n_top_heads)
+            supervision=config.supervision)
 
       self.sequence_output = self.all_encoder_layers[-1]
 
@@ -572,6 +584,7 @@ def create_attention_mask_from_input_mask(from_tensor, to_mask):
 
 def attention_layer(from_tensor,
                     to_tensor,
+                    config,
                     attention_mask=None,
                     null_mask=None,
                     remained_unlabeled_targets=None,
@@ -587,11 +600,7 @@ def attention_layer(from_tensor,
                     batch_size=None,
                     from_seq_length=None,
                     to_seq_length=None,
-                    supervision='easy-first',
-                    smoothing_rate=0,
-                    reuse_weight=True,
-                    num_sup_heads=1,
-                    n_top_heads=4):
+                    supervision='easy-first'):
   """Performs multi-headed attention from `from_tensor` to `to_tensor`.
 
   This is an implementation of multi-headed attention based on "Attention
@@ -646,6 +655,7 @@ def attention_layer(from_tensor,
     reuse_weight: whether to reuse attention weights across layers
     num_sup_heads: number of supervised attention heads
     n_top_heads: number of selected head at this layer
+    sup_head_size: size of supervised attention head
 
   Returns:
     float Tensor of shape [batch_size, from_seq_length,
@@ -748,46 +758,32 @@ def attention_layer(from_tensor,
     attention_scores += adder
 
   outputs = {}
-  if supervision.startswith('easy-first'):
+
+  with tf.variable_scope("graph_attention"):
     # losses: S * []
     # predictions: S * [B, F]
-    # attention_probs: S * [B, N, F, T]
-    losses, predictions, probabilities, attention_probs, used_heads, allowed_heads = easy_first_one_step(
-                                          remained_unlabeled_targets, attention_scores, 
-                                          attention_mask, null_mask, 
-                                          num_sup_heads, num_attention_heads,
-                                          n_top_heads, policy='random', smoothing_rate=smoothing_rate)
+    # graph_context_layer: [B, F, n*h]
+    losses, predictions, probabilities, graph_context_layer, used_heads, allowed_heads = easy_first_one_step(
+                                          remained_unlabeled_targets, from_tensor_2d,
+                                          to_tensor_2d, attention_mask, null_mask, batch_size,
+                                          from_seq_length, to_seq_length, use_biaffine=config.use_biaffine,
+                                          arc_hidden_size = config.arc_hidden_size, rel_hidden_size = 512,
+                                          num_sup_heads=config.num_sup_heads, 
+                                          n_top_heads=config.n_top_heads,
+                                          smoothing_rate=config.smoothing_rate,
+                                          initializer_range=initializer_range,
+                                          add_linear=config.arc_hidden_add_linear,
+                                          arc_hidden_keep_prob=config.arc_hidden_keep_prob,
+                                          do_return_2d_tensor=do_return_2d_tensor)
     outputs['acc_loss'] = tf.add_n(losses)
     outputs['predictions'] = predictions
     outputs['probabilities'] = probabilities
     outputs['used_heads'] = used_heads
     outputs['allowed_heads'] = allowed_heads
-    """
-    # [B, F, T] -> [B, F]
-    predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
 
-    predictions = nn.greater(accessible_scores_f, 0, dtype=tf.int32) * attention_mask
-    # [B, F, T] * [B, F, T] -> [B, F, T]
-    true_positives = predictions * remained_unlabeled_targets
-    # [B, F, T] -> ()
-    n_predictions = tf.reduce_sum(predictions)
-    n_targets = tf.reduce_sum(remained_unlabeled_targets)
-
-    n_true_positives = tf.reduce_sum(true_positives)
-    n_false_positives = n_predictions - n_true_positives
-    n_false_negatives = n_targets - n_true_positives
-
-    outputs['acc_loss'] = acc_loss
-    outputs['n_acc_true_positives'] = n_true_positives
-    outputs['n_acc_false_positives'] = n_false_positives
-    outputs['n_acc_false_negatives'] = n_false_negatives
-    outputs['probabilities'] = probabilities
-    outputs['true_positives'] = true_positives
-    """
-  else:
-    # Normalize the attention scores to probabilities.
-    # `attention_probs` = [B, N, F, T]
-    attention_probs = tf.nn.softmax(attention_scores)
+  # Normalize the attention scores to probabilities.
+  # `attention_probs` = [B, N, F, T]
+  attention_probs = tf.nn.softmax(attention_scores)
 
   # This is actually dropping out entire tokens to attend to, which might
   # seem a bit unusual, but is taken from the original Transformer paper.
@@ -812,22 +808,92 @@ def attention_layer(from_tensor,
     context_layer = tf.reshape(
         context_layer,
         [batch_size * from_seq_length, num_attention_heads * size_per_head])
+    context_layer = tf.concat([context_layer, graph_context_layer], axis=-1)
   else:
     # `context_layer` = [B, F, N*H]
     context_layer = tf.reshape(
         context_layer,
         [batch_size, from_seq_length, num_attention_heads * size_per_head])
+    context_layer = tf.concat([context_layer, graph_context_layer], axis=-1)
 
   return context_layer, outputs
 
-def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_mask, null_mask, 
-                      num_sup_heads=1, num_attention_heads=8, n_top_heads=4, policy='random',
-                      smoothing_rate=0.1):
+def easy_first_one_step(remained_unlabeled_targets, from_tensor_2d, to_tensor_2d,
+                      attention_mask, null_mask, batch_size, from_seq_length, 
+                      to_seq_length, use_biaffine=False, 
+                      arc_hidden_size=512, rel_hidden_size=512,
+                      num_sup_heads=1, n_top_heads=4, policy='random',
+                      smoothing_rate=0.1, initializer_range=0.02,
+                      add_linear=True, arc_hidden_keep_prob=0.67,
+                      do_return_2d_tensor=True):
   """
   remained_unlabeled_targets: [B, F, T], the arcs that have not been generated yet
   attention_scores: [B, N, F, T], N attention heads
   null_mask: [B, F], the null token is 1, all others are 0
   """
+
+  def transpose_for_scores(input_tensor, batch_size, num_attention_heads,
+                           seq_length, width):
+    output_tensor = tf.reshape(
+        input_tensor, [batch_size, seq_length, num_attention_heads, width])
+
+    output_tensor = tf.transpose(output_tensor, [0, 2, 1, 3])
+    return output_tensor
+
+  # Scalar dimensions referenced here:
+  #   B = batch size (number of sequences)
+  #   F = `from_tensor` sequence length
+  #   T = `to_tensor` sequence length
+  #   n = `num_sup_heads`
+  #   h = `arc_hidden_size`
+
+  # `query_layer` = [B*F, n*h], works as representation of dependent token
+  query_layer = tf.layers.dense(
+      from_tensor_2d,
+      num_sup_heads * arc_hidden_size,
+      name="graph_query",
+      kernel_initializer=create_initializer(initializer_range))
+
+  # `key_layer` = [B*T, n*h], works as representation of parent token
+  key_layer = tf.layers.dense(
+      to_tensor_2d,
+      num_sup_heads * arc_hidden_size,
+      name="graph_key",
+      kernel_initializer=create_initializer(initializer_range))
+
+  # `value_layer` = [B*T, n*h]
+  value_layer = tf.layers.dense(
+      to_tensor_2d,
+      num_sup_heads * arc_hidden_size,
+      name="graph_value",
+      kernel_initializer=create_initializer(initializer_range))
+
+  # `query_layer` = [B, n, F, h]
+  query_layer = transpose_for_scores(query_layer, batch_size, num_sup_heads,
+                                    from_seq_length, arc_hidden_size)
+
+  # `key_layer` = [B, n, T, h]
+  key_layer = transpose_for_scores(key_layer, batch_size, num_sup_heads,
+                                   to_seq_length, arc_hidden_size)
+
+  if use_biaffine:
+    #query_layer = query_layer[:,0,:,:]
+    #key_layer = key_layer[:,0,:,:]
+    with tf.variable_scope("Unlabeled"):
+      # `attention_scores` = [B, n, F, T]
+      attention_scores, _ = classifiers.bilinear_attention(
+                              query_layer, key_layer,
+                              hidden_keep_prob=arc_hidden_keep_prob,
+                              add_linear=add_linear)
+    #attention_scores = tf.expand_dims(attention_scores, 1)
+  else:
+    # Take the dot product between "query" and "key" to get the raw
+    # attention scores.
+    # `attention_scores` = [B, n, F, T]
+    attention_scores = tf.matmul(query_layer, key_layer, transpose_b=True)
+    attention_scores = tf.multiply(attention_scores,
+                                  1.0 / math.sqrt(float(arc_hidden_size)))
+
   use_null_mask = True
   # [B, F, T] -> [B, F], use the second column, 
   # since the first column is all 0 padding for null token
@@ -880,28 +946,53 @@ def easy_first_one_step(remained_unlabeled_targets, attention_scores, attention_
     predictions.append(prediction)
 
     # [B, F, T], expand the selected heads to 3D
+    # arc entry = 1 - smoothing_rate, other entry = smoothing_rate
     one_hot_probs = tf.one_hot(selected_gold_heads, to_seq_length, on_value=1.0-smoothing_rate, 
                                 off_value=0.0+smoothing_rate, axis=-1)
+    #eyes = tf.eye(to_seq_length)
+    #augmented_probs = one_hot_probs * (1-eyes) + eyes
     supervised_probs.append(one_hot_probs)
 
-  # Normalize the attention scores to probabilities.
-  # attention_probs = [B, N, F, T]
-  attention_probs = tf.nn.softmax(attention_scores)
   if num_sup_heads == 1:
     # [B, F, T] -> [B, 1, F, T]
     stacked_supervised_probs = tf.expand_dims(supervised_probs[0], axis=1)
   else:
-    # S x [B, F, T] -> [B, S, F, T]
+    # n x [B, F, T] -> [B, n, F, T]
     stacked_supervised_probs = tf.stack(supervised_probs, axis=1)
-  # [B, S, F, T], [B, N-S, F, T] -> [B, N, F, T]
-  new_attention_probs = tf.concat([stacked_supervised_probs, 
-                            attention_probs[:,num_sup_heads:,:,:]], axis=1)
+  # Normalize the attention scores to probabilities.
+
+  # Apply probs to value matrix
+  # `value_layer` = [B, T, n, h]
+  value_layer = tf.reshape(
+      value_layer,
+      [batch_size, to_seq_length, num_sup_heads, arc_hidden_size])
+
+  # `value_layer` = [B, n, T, h]
+  value_layer = tf.transpose(value_layer, [0, 2, 1, 3])
+
+  # `context_layer` = [B, n, F, h]
+  graph_context_layer = tf.matmul(stacked_supervised_probs, value_layer)
+
+  # `context_layer` = [B, F, n, h]
+  graph_context_layer = tf.transpose(graph_context_layer, [0, 2, 1, 3])
+
+  if do_return_2d_tensor:
+    # `context_layer` = [B*F, n*h]
+    graph_context_layer = tf.reshape(
+        graph_context_layer,
+        [batch_size * from_seq_length, num_sup_heads * arc_hidden_size])
+  else:
+    # `context_layer` = [B, F, n*h]
+    graph_context_layer = tf.reshape(
+        graph_context_layer,
+        [batch_size, from_seq_length, num_sup_heads * arc_hidden_size])
+
   # S x [B, F] -> [B, F, T]
   predictions_ = gather_subgraphs(predictions, attention_mask)
   # S x [B, F] -> [B, F, T]
   used_heads_ = gather_subgraphs(used_heads, attention_mask)
 
-  return losses, predictions_, probabilities, new_attention_probs, used_heads_, allowed_heads
+  return losses, predictions_, probabilities, graph_context_layer, used_heads_, allowed_heads
 
 def gather_subgraphs(head_index_list, attention_mask):
   """
@@ -999,6 +1090,7 @@ def indices_to_tensor(indices, batch_size, k, to_seq_len, value=1):
 
 
 def easy_first_transformer_model(input_tensor,
+                      config,
                       attention_mask=None,
                       null_mask=None,
                       unlabeled_targets=None,
@@ -1012,10 +1104,7 @@ def easy_first_transformer_model(input_tensor,
                       acc_mask_dropout_prob=0.1,
                       initializer_range=0.02,
                       do_return_all_layers=False,
-                      supervision='easy-first',
-                      smoothing_rate=0,
-                      num_sup_heads=1,
-                      n_top_heads=4):
+                      supervision='easy-first'):
   """Multi-headed, multi-layer Transformer from "Attention is All You Need".
 
   This is almost an exact implementation of the original Transformer encoder.
@@ -1097,6 +1186,7 @@ def easy_first_transformer_model(input_tensor,
           attention_head, outputs_ = attention_layer(
               from_tensor=layer_input,
               to_tensor=layer_input,
+              config=config,
               attention_mask=attention_mask,
               null_mask=null_mask,
               remained_unlabeled_targets=remained_unlabeled_targets,
@@ -1109,11 +1199,7 @@ def easy_first_transformer_model(input_tensor,
               batch_size=batch_size,
               from_seq_length=seq_length,
               to_seq_length=seq_length,
-              supervision=supervision,
-              smoothing_rate=smoothing_rate,
-              reuse_weight=True,
-              num_sup_heads=num_sup_heads,
-              n_top_heads=n_top_heads)
+              supervision=supervision)
           attention_heads.append(attention_head)
           for field in outputs_:
             outputs[field].append(outputs_[field])

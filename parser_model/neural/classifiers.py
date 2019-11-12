@@ -417,25 +417,24 @@ def diagonal_bilinear_discriminator(layer1, layer2, hidden_keep_prob=1., add_lin
 #===============================================================
 def bilinear_attention(layer1, layer2, hidden_keep_prob=1., add_linear=True):
   """"""
-  
   layer_shape = nn.get_sizes(layer1)
   bucket_size = layer_shape[-2]
   input1_size = layer_shape.pop()+add_linear
   input2_size = layer2.get_shape().as_list()[-1]
   ones_shape = tf.stack(layer_shape + [1])
-  
+
   weights = tf.get_variable('Weights', shape=[input1_size, input2_size], initializer=tf.zeros_initializer)
   tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES, tf.nn.l2_loss(weights))
   original_layer1 = layer1
   if hidden_keep_prob < 1.:
     noise_shape1 = tf.stack(layer_shape[:-1] + [1, input1_size-add_linear])
-    noise_shape2 = tf.stack(layer_shape[:-2] + [1, input2_size])
+    noise_shape2 = tf.stack(layer_shape[:-1] + [1, input2_size])
     layer1 = nn.dropout(layer1, hidden_keep_prob, noise_shape=noise_shape1)
     layer2 = nn.dropout(layer2, hidden_keep_prob, noise_shape=noise_shape2)
   if add_linear:
     ones = tf.ones(ones_shape)
     layer1 = tf.concat([layer1, ones], -1)
-  
+
   # (n x m x d) -> (nm x d)
   layer1 = nn.reshape(layer1, [-1, input1_size])
   # (n x m x d) -> (n x m x d)
@@ -443,6 +442,7 @@ def bilinear_attention(layer1, layer2, hidden_keep_prob=1., add_linear=True):
   
   # (nm x d) * (d x d) -> (nm x d)
   attn = tf.matmul(layer1, weights)
+  
   # (nm x d) -> (n x m x d)
   attn = nn.reshape(attn, [-1, bucket_size, input2_size])
   # (n x m x d) * (n x m x d) -> (n x m x m)
