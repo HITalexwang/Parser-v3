@@ -918,7 +918,7 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
   for i in range(num_sup_heads):
     # [B, F, T]
     supervised_logits = attention_scores[:,i,:,:]
-    probability = tf.nn.softmax(supervised_logits) * tf.to_float(attention_mask)
+    probability = tf.nn.softmax(supervised_logits) #* tf.to_float(attention_mask)
     probabilities.append(probability)
     disallowed_adder = (1.0 - tf.cast(allowed_heads, tf.float32)) * -10000.0
     # [B, F, T], scores for allowed dep heads (including NULL)

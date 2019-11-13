@@ -298,6 +298,7 @@ class GraphOutputs(object):
       for h, probs in enumerate(headprobs):
         # remove the null token and root token at 0 and 1
         head_indices = np.argmax(probs, axis=-1)[:,1:]
+        #print (probs)
         #print (head_indices)
         # the i-th sentence in the batch
         for i, heads in enumerate(head_indices):
