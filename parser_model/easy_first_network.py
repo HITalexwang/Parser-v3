@@ -154,7 +154,8 @@ class EasyFirstNetwork(BaseNetwork):
                                                       arc_hidden_keep_prob=self.arc_hidden_keep_prob,
                                                       rel_hidden_size=self.rel_hidden_size,
                                                       rel_hidden_add_linear=self.rel_hidden_add_linear,
-                                                      rel_hidden_keep_prob=self.rel_hidden_keep_prob)
+                                                      rel_hidden_keep_prob=self.rel_hidden_keep_prob,
+                                                      sample_policy=self.sample_policy)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
@@ -223,7 +224,8 @@ class EasyFirstNetwork(BaseNetwork):
           #  else:
           #    outputs['semgraph'][field] = acc_outputs[field]
         self._evals.add('semgraph')
-    outputs['semgraph']['losses_by_layer'] = losses_by_layer
+    if self.optimize_by_layer:
+      outputs['semgraph']['losses_by_layer'] = losses_by_layer
     outputs['semgraph']['preds_by_layer'] = acc_outputs['preds_by_layer']
     outputs['semgraph']['allowed_heads'] = acc_outputs['allowed_heads']
     outputs['semgraph']['used_heads'] = acc_outputs['used_heads']
@@ -278,6 +280,7 @@ class EasyFirstNetwork(BaseNetwork):
     update_step = tf.assign_add(self.global_step, 1)
 
     if train_outputs.losses_by_layer:
+      print ("optimize by layer")
       adam_ops = []
       adam_optimizers = []
       for n_layer, loss in enumerate(train_outputs.losses_by_layer):
@@ -427,7 +430,7 @@ class EasyFirstNetwork(BaseNetwork):
                   dev_outputs.restart_timer()
                   feed_dict = devset.set_placeholders(batch)
                   dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
-                  dev_outputs.update_history(dev_scores, show=False)
+                  dev_outputs.update_history(dev_scores, show=True)
                 current_accuracy *= .5
                 current_accuracy += .5*dev_outputs.get_current_accuracy()
                 if current_accuracy >= best_accuracy:
@@ -459,8 +462,9 @@ class EasyFirstNetwork(BaseNetwork):
           pass
         if self.save_model_after_training:
           saver.save(sess, os.path.join(self.save_dir, 'ckpt'), global_step=self.global_step, write_meta_graph=False)
-
+    # optimize together
     else:
+      print ("optimize together")
       if self.use_bert_adam:
         adam_op = create_optimizer(loss=train_outputs.loss + regularization_loss,
                                    init_lr=float(self._config._sections['Optimizer']['learning_rate']),
@@ -574,7 +578,7 @@ class EasyFirstNetwork(BaseNetwork):
                   dev_outputs.restart_timer()
                   feed_dict = devset.set_placeholders(batch)
                   dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
-                  dev_outputs.update_history(dev_scores)
+                  dev_outputs.update_history(dev_scores, show=True)
                 current_accuracy *= .5
                 current_accuracy += .5*dev_outputs.get_current_accuracy()
                 if current_accuracy >= best_accuracy:
@@ -763,6 +767,9 @@ class EasyFirstNetwork(BaseNetwork):
   def n_top_selected_depheads(self):
     return self._config.getint(self, 'n_top_selected_depheads')
   @property
+  def optimize_by_layer(self):
+    return self._config.getboolean(self, 'optimize_by_layer')
+  @property
   def use_biaffine(self):
     return self._config.getboolean(self, 'use_biaffine')
   @property
@@ -783,3 +790,6 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def rel_hidden_keep_prob(self):
     return self._config.getfloat(self, 'rel_hidden_keep_prob')
+  @property
+  def sample_policy(self):
+    return self._config.getstr(self, 'sample_policy')

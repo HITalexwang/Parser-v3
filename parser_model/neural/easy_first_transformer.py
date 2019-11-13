@@ -53,7 +53,8 @@ class EasyFirstTransformerConfig(object):
                arc_hidden_keep_prob=0.67,
                rel_hidden_size=512,
                rel_hidden_add_linear=True,
-               rel_hidden_keep_prob=0.67):
+               rel_hidden_keep_prob=0.67,
+               sample_policy='random'):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -101,6 +102,9 @@ class EasyFirstTransformerConfig(object):
     self.rel_hidden_size = rel_hidden_size
     self.arc_hidden_add_linear = arc_hidden_add_linear
     self.arc_hidden_keep_prob = arc_hidden_keep_prob
+    self.sample_policy = sample_policy
+
+    print ("supervision type: {}\nsample policy: {}".format(supervision, sample_policy))
 
     assert supervision in ['easy-first', 'mask-bi', 'mask-uni', 'none', 'graph-bi', 'graph-uni']
 
@@ -768,7 +772,9 @@ def attention_layer(from_tensor,
                                           config,
                                           remained_unlabeled_targets, from_tensor_2d,
                                           to_tensor_2d, attention_mask, null_mask, batch_size,
-                                          from_seq_length, to_seq_length, use_biaffine=config.use_biaffine,
+                                          from_seq_length, to_seq_length, 
+                                          policy=config.sample_policy,
+                                          use_biaffine=config.use_biaffine,
                                           arc_hidden_size = config.arc_hidden_size, rel_hidden_size = 512,
                                           num_sup_heads=config.num_sup_heads, 
                                           n_top_heads=config.n_top_heads,
@@ -920,17 +926,12 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
     supervised_logits = attention_scores[:,i,:,:]
     probability = tf.nn.softmax(supervised_logits) #* tf.to_float(attention_mask)
     probabilities.append(probability)
-    disallowed_adder = (1.0 - tf.cast(allowed_heads, tf.float32)) * -10000.0
-    # [B, F, T], scores for allowed dep heads (including NULL)
-    allowed_scores = supervised_logits + disallowed_adder
-    # [B], the index of null token for each sentence
-    #null_indices = tf.argmax(null_mask, axis=-1)
-    # [B, F], the best allowed dep heads at attention head-i 
-    #selected_gold_heads = tf.argmax(allowed_scores, axis=-1, output_type=tf.int32)
     if policy == 'top_k':
       selected_gold_heads = top_k_heads(allowed_scores, null_mask, n=n_top_heads)
     elif policy == 'random':
-      selected_gold_heads, null_index_tensor = random_sample(allowed_heads, null_mask, from_seq_length)
+      selected_gold_heads = random_sample(allowed_heads, null_mask, from_seq_length)
+    elif policy == 'confidence':
+      selected_gold_heads = confidence_sample(supervised_logits, allowed_heads, null_mask, from_seq_length)
     # [B, 1], the number of remained arcs of each sentence
     remained_arcs_cnt = tf.reduce_sum(tf.reduce_sum(remained_unlabeled_targets, axis=-1), axis=-1, keep_dims=True)
     # [B, F]
@@ -1018,6 +1019,39 @@ def gather_subgraphs(head_index_list, attention_mask):
   gathered_graph = nn.greater(tf.add_n(matrices), 0) * attention_mask
   return gathered_graph
 
+def confidence_sample(supervised_logits, allowed_heads, null_mask, seq_len):
+  """
+  Ramdonly sample one head for each word from the allowed_heads
+  Input:
+    supervised_logits: [B, F, T], logits (Q*K) for the current attention head
+    allowed_heads: [B, F, T], entry is 1 if the head is allowed, elseweise 0
+    null_mask: [B, F], entry is 1 if is the null token, elsewise 0
+  Return:
+    selected_gold_heads: [B, F], each entry is the index of the chosen word
+  """
+  disallowed_adder = (1.0 - tf.cast(allowed_heads, tf.float32)) * -10000.0
+  # [B, F, T], scores for allowed dep heads (including NULL)
+  allowed_scores = supervised_logits + disallowed_adder
+  # [B, F], the best allowed dep heads at attention head-i 
+  selected_heads_ = tf.argmax(allowed_scores, axis=-1, output_type=tf.int32)
+
+  # [B], the null index of each sentence
+  null_indices = tf.argmax(null_mask, axis=-1)
+  # [B, F]
+  zeros = tf.zeros_like(null_mask, dtype=tf.int32)
+  # [B, F], tile null_indices to 2D
+  null_index_tensor = tf.cast(tf.expand_dims(null_indices, axis=-1), dtype=tf.int32) + zeros
+  # [B, F], number of allowed heads for each word
+  allowed_head_cnt = tf.reduce_sum(allowed_heads, axis=-1)
+  # [B, F], if there is no head allowed, select the null token
+  #print (allowed_head_cnt)
+  selected_gold_heads = tf.where(tf.equal(allowed_head_cnt,0), null_index_tensor, selected_heads_)
+
+  #debug_tensor = tf.concat([allowed_head_cnt, null_index_tensor,
+  # selected_heads_, selected_gold_heads], axis=-1)
+
+  return selected_gold_heads
+
 def random_sample(allowed_heads, null_mask, seq_len):
   """
   Ramdonly sample one head for each word from the allowed_heads
@@ -1046,7 +1080,7 @@ def random_sample(allowed_heads, null_mask, seq_len):
   #debug_tensor = tf.concat([allowed_head_cnt, null_index_tensor,
   # selected_heads_, selected_gold_heads], axis=-1)
 
-  return selected_gold_heads, null_index_tensor
+  return selected_gold_heads
 
 def top_k_heads(scores, null_mask, n=4):
   """
@@ -1183,8 +1217,8 @@ def easy_first_transformer_model(input_tensor,
 
   for layer_idx in range(num_hidden_layers):
     #print ('layer_id:{}'.format(layer_idx))
-    with tf.variable_scope("layer_%d" % layer_idx):
-    #with tf.variable_scope("block", reuse=tf.AUTO_REUSE):
+    #with tf.variable_scope("layer_%d" % layer_idx):
+    with tf.variable_scope("block", reuse=tf.AUTO_REUSE):
       layer_input = prev_output
 
       with tf.variable_scope("attention"):
