@@ -54,7 +54,8 @@ class EasyFirstTransformerConfig(object):
                rel_hidden_size=512,
                rel_hidden_add_linear=True,
                rel_hidden_keep_prob=0.67,
-               sample_policy='random'):
+               sample_policy='random',
+               share_attention_params=True):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -103,8 +104,10 @@ class EasyFirstTransformerConfig(object):
     self.arc_hidden_add_linear = arc_hidden_add_linear
     self.arc_hidden_keep_prob = arc_hidden_keep_prob
     self.sample_policy = sample_policy
+    self.share_attention_params = share_attention_params
 
-    print ("supervision type: {}\nsample policy: {}".format(supervision, sample_policy))
+    print ("supervision type: {}\nsample policy: {}\nshare attention parameters: {}".format(
+            supervision, sample_policy, share_attention_params))
 
     assert supervision in ['easy-first', 'mask-bi', 'mask-uni', 'none', 'graph-bi', 'graph-uni']
 
@@ -1217,8 +1220,12 @@ def easy_first_transformer_model(input_tensor,
 
   for layer_idx in range(num_hidden_layers):
     #print ('layer_id:{}'.format(layer_idx))
+    if config.share_attention_params:
+      scope = "block"
+    else:
+      scope = "layer_%d" % layer_idx
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
     #with tf.variable_scope("layer_%d" % layer_idx):
-    with tf.variable_scope("block", reuse=tf.AUTO_REUSE):
       layer_input = prev_output
 
       with tf.variable_scope("attention"):

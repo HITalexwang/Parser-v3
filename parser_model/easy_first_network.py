@@ -155,7 +155,8 @@ class EasyFirstNetwork(BaseNetwork):
                                                       rel_hidden_size=self.rel_hidden_size,
                                                       rel_hidden_add_linear=self.rel_hidden_add_linear,
                                                       rel_hidden_keep_prob=self.rel_hidden_keep_prob,
-                                                      sample_policy=self.sample_policy)
+                                                      sample_policy=self.sample_policy,
+                                                      share_attention_params=self.share_attention_params)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
@@ -793,3 +794,6 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def sample_policy(self):
     return self._config.getstr(self, 'sample_policy')
+  @property
+  def share_attention_params(self):
+    return self._config.getboolean(self, 'share_attention_params')
