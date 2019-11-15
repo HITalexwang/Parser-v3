@@ -157,7 +157,8 @@ class EasyFirstNetwork(BaseNetwork):
                                                       rel_hidden_keep_prob=self.rel_hidden_keep_prob,
                                                       sample_policy=self.sample_policy,
                                                       share_attention_params=self.share_attention_params,
-                                                      maskout_fully_generated_sents=self.maskout_fully_generated_sents)
+                                                      maskout_fully_generated_sents=self.maskout_fully_generated_sents,
+                                                      use_prob_for_sup=self.use_prob_for_sup)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
@@ -801,3 +802,6 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def maskout_fully_generated_sents(self):
     return self._config.getboolean(self, 'maskout_fully_generated_sents')
+  @property
+  def use_prob_for_sup(self):
+    return self._config.getboolean(self, 'use_prob_for_sup')

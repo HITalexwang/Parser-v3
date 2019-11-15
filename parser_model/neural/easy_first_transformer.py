@@ -56,7 +56,8 @@ class EasyFirstTransformerConfig(object):
                rel_hidden_keep_prob=0.67,
                sample_policy='random',
                share_attention_params=True,
-               maskout_fully_generated_sents=False):
+               maskout_fully_generated_sents=False,
+               use_prob_for_sup=False):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -107,9 +108,12 @@ class EasyFirstTransformerConfig(object):
     self.sample_policy = sample_policy
     self.share_attention_params = share_attention_params
     self.maskout_fully_generated_sents = maskout_fully_generated_sents
+    self.use_prob_for_sup = use_prob_for_sup
 
-    print ("supervision type: {}\nsample policy: {}\nshare attention parameters: {}\nmask out fully generated sentences:{}".format(
-            supervision, sample_policy, share_attention_params, maskout_fully_generated_sents))
+    print ("supervision type: {}\nsample policy: {}\nshare attention parameters: {}".format(
+            supervision, sample_policy, share_attention_params))
+    print ("mask out fully generated sentences:{}\nuse probability for supervision matrix while predicting:{}".format(
+            maskout_fully_generated_sents, use_prob_for_sup))
 
     assert supervision in ['easy-first', 'mask-bi', 'mask-uni', 'none', 'graph-bi', 'graph-uni']
 
@@ -957,6 +961,7 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
     prediction = tf.argmax(supervised_logits, axis=-1, output_type=tf.int32)
     predictions.append(prediction)
 
+    print ('Is training:',config.is_training)
     if config.is_training:
       # [B, F, T], expand the selected heads to 3D
       # arc entry = 1 - smoothing_rate, other entry = smoothing_rate
@@ -966,8 +971,14 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
       #augmented_probs = one_hot_probs * (1-eyes) + eyes
       supervised_probs.append(one_hot_probs)
     else:
-      # probability: [B, F, T]
-      supervised_probs.append(probability)
+      if config.use_prob_for_sup:
+        # probability: [B, F, T]
+        supervised_probs.append(probability)
+      else:
+        one_hot_probs = tf.one_hot(prediction, to_seq_length, on_value=1.0-smoothing_rate, 
+                                off_value=0.0+smoothing_rate, axis=-1)
+        supervised_probs.append(one_hot_probs)
+      
 
   if num_sup_heads == 1:
     # [B, F, T] -> [B, 1, F, T]
