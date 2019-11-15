@@ -156,7 +156,8 @@ class EasyFirstNetwork(BaseNetwork):
                                                       rel_hidden_add_linear=self.rel_hidden_add_linear,
                                                       rel_hidden_keep_prob=self.rel_hidden_keep_prob,
                                                       sample_policy=self.sample_policy,
-                                                      share_attention_params=self.share_attention_params)
+                                                      share_attention_params=self.share_attention_params,
+                                                      maskout_fully_generated_sents=self.maskout_fully_generated_sents)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
@@ -797,3 +798,6 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def share_attention_params(self):
     return self._config.getboolean(self, 'share_attention_params')
+  @property
+  def maskout_fully_generated_sents(self):
+    return self._config.getboolean(self, 'maskout_fully_generated_sents')

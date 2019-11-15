@@ -55,7 +55,8 @@ class EasyFirstTransformerConfig(object):
                rel_hidden_add_linear=True,
                rel_hidden_keep_prob=0.67,
                sample_policy='random',
-               share_attention_params=True):
+               share_attention_params=True,
+               maskout_fully_generated_sents=False):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -105,9 +106,10 @@ class EasyFirstTransformerConfig(object):
     self.arc_hidden_keep_prob = arc_hidden_keep_prob
     self.sample_policy = sample_policy
     self.share_attention_params = share_attention_params
+    self.maskout_fully_generated_sents = maskout_fully_generated_sents
 
-    print ("supervision type: {}\nsample policy: {}\nshare attention parameters: {}".format(
-            supervision, sample_policy, share_attention_params))
+    print ("supervision type: {}\nsample policy: {}\nshare attention parameters: {}\nmask out fully generated sentences:{}".format(
+            supervision, sample_policy, share_attention_params, maskout_fully_generated_sents))
 
     assert supervision in ['easy-first', 'mask-bi', 'mask-uni', 'none', 'graph-bi', 'graph-uni']
 
@@ -935,14 +937,17 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
       selected_gold_heads = random_sample(allowed_heads, null_mask, from_seq_length)
     elif policy == 'confidence':
       selected_gold_heads = confidence_sample(supervised_logits, allowed_heads, null_mask, from_seq_length)
-    # [B, 1], the number of remained arcs of each sentence
-    remained_arcs_cnt = tf.reduce_sum(tf.reduce_sum(remained_unlabeled_targets, axis=-1), axis=-1, keep_dims=True)
-    # [B, F]
-    zero_mask = tf.zeros_like(sliced_attention_mask)
-    # [B, F], tile it to 2D
-    remained_arcs_cnt_ = remained_arcs_cnt + zero_mask
-    # [B, F]
-    new_attention_mask = tf.where(tf.equal(remained_arcs_cnt_,0), zero_mask, sliced_attention_mask)
+    if config.maskout_fully_generated_sents:
+      # [B, 1], the number of remained arcs of each sentence
+      remained_arcs_cnt = tf.reduce_sum(tf.reduce_sum(remained_unlabeled_targets, axis=-1), axis=-1, keep_dims=True)
+      # [B, F]
+      zero_mask = tf.zeros_like(sliced_attention_mask)
+      # [B, F], tile it to 2D
+      remained_arcs_cnt_ = remained_arcs_cnt + zero_mask
+      # [B, F]
+      new_attention_mask = tf.where(tf.equal(remained_arcs_cnt_,0), zero_mask, sliced_attention_mask)
+    else:
+      new_attention_mask = sliced_attention_mask
     used_heads.append(selected_gold_heads)
     # [B, F], [B, F, T], [B, F] -> ()
     loss = tf.losses.sparse_softmax_cross_entropy(selected_gold_heads, supervised_logits, 
