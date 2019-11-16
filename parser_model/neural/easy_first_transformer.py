@@ -932,8 +932,9 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
   used_heads = []
   for i in range(num_sup_heads):
     # [B, F, T]
+    mask_with_null = attention_mask + tf.expand_dims(null_mask, axis=1)
     supervised_logits = attention_scores[:,i,:,:]
-    probability = tf.nn.softmax(supervised_logits) #* tf.to_float(attention_mask)
+    probability = tf.nn.softmax(supervised_logits) * tf.to_float(mask_with_null)
     probabilities.append(probability)
     if policy == 'top_k':
       selected_gold_heads = top_k_heads(allowed_scores, null_mask, n=n_top_heads)
