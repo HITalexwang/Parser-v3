@@ -173,7 +173,7 @@ class GraphOutputs(object):
     return
   
   #=============================================================
-  def probs_to_preds(self, probabilities, lengths, augment_layers=None):
+  def probs_to_preds(self, probabilities, lengths, augment_layers=None, policy='confidence'):
     """"""
 
     predictions = {}
@@ -253,7 +253,8 @@ class GraphOutputs(object):
         semgraph_preds = self.sem16decoder(semgraph_probs, lengths)
       elif self._factored_semgraph and self.decoder == 'easy-first':
         assert 'semhead' in probabilities
-        predictions['semrel'] = self.easyfirst_decoder(probabilities['semhead'], semgraph_probs, lengths)
+        predictions['semrel'] = self.easyfirst_decoder(probabilities['semhead'], semgraph_probs, lengths,
+                                                        policy=policy)
         predictions['semhead'] = []
         return predictions
       elif self._factored_semgraph:
@@ -281,7 +282,7 @@ class GraphOutputs(object):
               sparse_semgraph_preds[-1][-1].append((k, semgraph_preds[i,j,k]))
     return predictions
 
-  def easyfirst_decoder(self, semhead_probs, semrel_probs, lengths):
+  def easyfirst_decoder(self, semhead_probs, semrel_probs, lengths, policy='confidence'):
     #print (len(semhead_probs), len(semhead_probs[0]), semhead_probs[0][0].shape)
     #print (semrel_probs.shape)
 
@@ -296,23 +297,45 @@ class GraphOutputs(object):
     for n_layer, headprobs in enumerate(semhead_probs):
       # for each attention head
       for h, probs in enumerate(headprobs):
-        # remove the null token and root token at 0 and 1
-        head_indices = np.argmax(probs, axis=-1)[:,1:]
-        #print (probs)
-        #print (head_indices)
-        # the i-th sentence in the batch
-        for i, heads in enumerate(head_indices):
-          for j, head in enumerate(heads):
-            if head > 0:
-              head_exists = False
-              # do not add duplicate arc
-              for h_, s in sparse_semgraph_preds[i][j]:
-                if h_ == head-1:
-                  head_exists = True
-                  break
-              if not head_exists:
-                # substract the index of null token, so null token == -1
-                sparse_semgraph_preds[i][j].append((head-1,semrel_preds[i,j,head]))
+        if policy == 'top_k':
+          # (n x m x m)
+          # remove the null token
+          semhead_preds = np.where(probs >= .5, 1, 0)[:,1:,:]
+          # (n x m x m) (*) (n x m x m) -> (n x m x m)
+          semgraph_preds = semhead_preds * semrel_preds
+          # i-th sentence
+          for i in range(len(semgraph_preds)):
+            # j-th word
+            for j in range(len(semgraph_preds[i])):
+              # k-th word
+              for k, pred in enumerate(semgraph_preds[i,j]):
+                if pred:
+                  head_exists = False
+                  for h, s in sparse_semgraph_preds[i][j]:
+                    if h == k-1:
+                      head_exists = True
+                      break
+                  if not head_exists:
+                    # substract the index of null token
+                    sparse_semgraph_preds[i][j].append((k-1, semgraph_preds[i,j,k]))
+        else:
+          # remove the null token at 0 
+          head_indices = np.argmax(probs, axis=-1)[:,1:]
+          #print (probs)
+          #print (head_indices)
+          # the i-th sentence in the batch
+          for i, heads in enumerate(head_indices):
+            for j, head in enumerate(heads):
+              if head > 0:
+                head_exists = False
+                # do not add duplicate arc
+                for h_, s in sparse_semgraph_preds[i][j]:
+                  if h_ == head-1:
+                    head_exists = True
+                    break
+                if not head_exists:
+                  # substract the index of null token, so null token == -1
+                  sparse_semgraph_preds[i][j].append((head-1,semrel_preds[i,j,head]))
     #print (sparse_semgraph_preds)
     return sparse_semgraph_preds
 

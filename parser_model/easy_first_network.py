@@ -686,7 +686,8 @@ class EasyFirstNetwork(BaseNetwork):
         lengths = lengths - 1
         feed_dict = dataset.set_placeholders(indices)
         probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
-        predictions = graph_outputs.probs_to_preds(probabilities, lengths, augment_layers=augment_layers)
+        predictions = graph_outputs.probs_to_preds(probabilities, lengths, augment_layers=augment_layers,
+                                                    policy=self.sample_policy)
         tokens.update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
         graph_outputs.cache_predictions(tokens, indices)
 
