@@ -996,7 +996,7 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
         selected_gold_heads_3D_ = selected_gold_heads_3D
       used_heads.append(selected_gold_heads_3D_)
       # update allowed_heads to make sure other attention head do not select these depheads
-      allowed_heads = allowed_heads - selected_gold_heads_3D_
+      allowed_heads = allowed_heads - selected_gold_heads_3D_ * attention_mask
 
       if use_null_mask:
         attention_mask_3D = attention_mask + null_mask_3D
@@ -1066,7 +1066,7 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
       used_heads.append(selected_gold_heads)
       # update allowed_heads to make sure other attention head do not select these depheads
       allowed_heads = allowed_heads - tf.one_hot(selected_gold_heads, to_seq_length, on_value=1, 
-                                                  off_value=0, axis=-1)
+                                                  off_value=0, axis=-1) * attention_mask
       
 
   if num_sup_heads == 1:
