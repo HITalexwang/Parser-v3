@@ -186,7 +186,7 @@ class EasyFirstNetwork(BaseNetwork):
         # shape = [batch_size, seq_len, hidden_size]
         layer = transformer.get_sequence_output()
 
-      acc_outputs = transformer.get_outputs()
+      acc_outputs = transformer.get_outputs(self.do_eval_by_layer)
       losses_by_layer = acc_outputs['acc_loss']
       if not reuse and self.n_steps_change_loss_weight > 0:
         self.loss_weights = tf.placeholder(tf.float32, shape=[self.n_layers], name='loss-weights')
@@ -229,6 +229,11 @@ class EasyFirstNetwork(BaseNetwork):
         self._evals.add('semgraph')
     if self.optimize_by_layer:
       outputs['semgraph']['losses_by_layer'] = losses_by_layer
+    if self.do_eval_by_layer:
+      outputs['semgraph']['n_acc_true_positives'] = acc_outputs['n_acc_true_positives']
+      outputs['semgraph']['n_acc_false_positives'] = acc_outputs['n_acc_false_positives']
+      outputs['semgraph']['n_acc_false_negatives'] = acc_outputs['n_acc_false_negatives']
+      outputs['semgraph']['acc_loss'] = acc_outputs['acc_loss']
     outputs['semgraph']['preds_by_layer'] = acc_outputs['preds_by_layer']
     outputs['semgraph']['allowed_heads'] = acc_outputs['allowed_heads']
     outputs['semgraph']['used_heads'] = acc_outputs['used_heads']
@@ -806,3 +811,6 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def use_prob_for_sup(self):
     return self._config.getboolean(self, 'use_prob_for_sup')
+  @property
+  def do_eval_by_layer(self):
+    return self._config.getboolean(self, 'do_eval_by_layer')

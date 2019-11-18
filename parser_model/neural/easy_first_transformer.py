@@ -275,10 +275,10 @@ class EasyFirstTransformer(object):
   def get_all_encoder_layers(self):
     return self.all_encoder_layers
 
-  def get_outputs(self):
-    return self.compute_outputs(self.outputs)
+  def get_outputs(self, do_eval_by_layer=False):
+    return self.compute_outputs(self.outputs,do_eval_by_layer=do_eval_by_layer)
 
-  def compute_outputs(self, outputs):
+  def compute_outputs(self, outputs, do_eval_by_layer=False):
 
     # n_layers x [batch_size, seq_len, seq_len]
     predictions = outputs['predictions']
@@ -286,15 +286,32 @@ class EasyFirstTransformer(object):
     predictions = nn.greater(tf.add_n(predictions),0)
     outputs['preds_by_layer'] = outputs['predictions']
     outputs['predictions'] = predictions
-    # there might be better way ?
-    #outputs['probabilities'] = tf.to_float(predictions)
-
+    
     targets = outputs['unlabeled_targets']
-    # [B, F, T] * [B, F, T] -> [B, F, T]
+    n_targets = tf.reduce_sum(targets)
+    if do_eval_by_layer:
+      outputs['n_acc_true_positives'] = []
+      outputs['n_acc_false_positives'] = []
+      outputs['n_acc_false_negatives'] = []
+      #outputs['acc_loss_by_layer'] = []
+      # [B, F, T] * [B, F, T] -> [B, F, T]
+      for n_layer, preds in enumerate(outputs['preds_by_layer']):
+        true_positives = preds * targets
+        # [B, F, T] -> ()
+        n_predictions = tf.reduce_sum(preds)
+        
+        n_true_positives = tf.reduce_sum(true_positives)
+        n_false_positives = n_predictions - n_true_positives
+        n_false_negatives = n_targets - n_true_positives
+        outputs['n_acc_true_positives'].append(n_true_positives)
+        outputs['n_acc_false_positives'].append(n_false_positives)
+        outputs['n_acc_false_negatives'].append(n_false_negatives)
+        #outputs['acc_loss_by_layer'].append(outputs['acc_loss'][n_layer])
+
     true_positives = predictions * targets
     # [B, F, T] -> ()
     n_predictions = tf.reduce_sum(predictions)
-    n_targets = tf.reduce_sum(targets)
+    #n_targets = tf.reduce_sum(targets)
 
     n_true_positives = tf.reduce_sum(true_positives)
     n_false_positives = n_predictions - n_true_positives
