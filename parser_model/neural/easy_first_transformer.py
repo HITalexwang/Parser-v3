@@ -57,7 +57,9 @@ class EasyFirstTransformerConfig(object):
                sample_policy='random',
                share_attention_params=True,
                maskout_fully_generated_sents=False,
-               use_prob_for_sup=False):
+               use_prob_for_sup=False,
+               gold_head_keep_prob=1,
+               remove_masked_gold_head=False):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -109,6 +111,8 @@ class EasyFirstTransformerConfig(object):
     self.share_attention_params = share_attention_params
     self.maskout_fully_generated_sents = maskout_fully_generated_sents
     self.use_prob_for_sup = use_prob_for_sup
+    self.gold_head_keep_prob = gold_head_keep_prob
+    self.remove_masked_gold_head = remove_masked_gold_head
 
     print ("supervision type: {}\nsample policy: {}\nshare attention parameters: {}".format(
             supervision, sample_policy, share_attention_params))
@@ -976,7 +980,7 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
       new_attention_mask = sliced_attention_mask
     
     if policy == 'top_k':
-      add_null_for_words_with_no_head = True
+      add_null_for_words_with_no_head = False
       # [B, F, T]
       zeros = tf.zeros_like(selected_gold_heads_3D)
       # [B, F, T]
@@ -991,6 +995,8 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
       else:
         selected_gold_heads_3D_ = selected_gold_heads_3D
       used_heads.append(selected_gold_heads_3D_)
+      # update allowed_heads to make sure other attention head do not select these depheads
+      allowed_heads = allowed_heads - selected_gold_heads_3D_
 
       if use_null_mask:
         attention_mask_3D = attention_mask + null_mask_3D
@@ -1021,7 +1027,6 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
           supervised_probs.append(smoothed_head_tensor)
     # for random & confidence
     else:
-      used_heads.append(selected_gold_heads)
       # [B, F], [B, F, T], [B, F] -> ()
       loss = tf.losses.sparse_softmax_cross_entropy(selected_gold_heads, supervised_logits, 
                                                     weights=new_attention_mask)
@@ -1030,23 +1035,38 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
       prediction = tf.argmax(supervised_logits, axis=-1, output_type=tf.int32)
       predictions.append(prediction)
 
+      pred_one_hot_probs = tf.one_hot(prediction, to_seq_length, on_value=1.0-smoothing_rate, 
+                                  off_value=0.0+smoothing_rate, axis=-1)
       #print ('Is training:',config.is_training)
       if config.is_training:
         # [B, F, T], expand the selected heads to 3D
         # arc entry = 1 - smoothing_rate, other entry = smoothing_rate
-        one_hot_probs = tf.one_hot(selected_gold_heads, to_seq_length, on_value=1.0-smoothing_rate, 
+        gold_one_hot_probs = tf.one_hot(selected_gold_heads, to_seq_length, on_value=1.0-smoothing_rate, 
                                   off_value=0.0+smoothing_rate, axis=-1)
+        if config.gold_head_keep_prob < 1:
+          mask_shape = tf.stack([batch_size, from_seq_length, 1])
+          # [B, F, 1], 0-1 tensor, keep the lines whose entries are 1
+          prob_mask = nn.binary_mask(mask_shape, config.gold_head_keep_prob)
+          gold_one_hot_probs = prob_mask * gold_one_hot_probs + (1-prob_mask) * pred_one_hot_probs
+          if config.remove_masked_gold_head:
+            # [B, F]
+            prob_mask_2D = tf.squeeze(prob_mask, axis=-1)
+            # [B, F], remove the masked gold head from used_heads
+            selected_gold_heads = tf.cast(prob_mask_2D, tf.int32) * selected_gold_heads
         #eyes = tf.eye(to_seq_length)
         #augmented_probs = one_hot_probs * (1-eyes) + eyes
-        supervised_probs.append(one_hot_probs)
+        supervised_probs.append(gold_one_hot_probs)
       else:
         if config.use_prob_for_sup:
           # probability: [B, F, T]
           supervised_probs.append(probability)
         else:
-          one_hot_probs = tf.one_hot(prediction, to_seq_length, on_value=1.0-smoothing_rate, 
-                                  off_value=0.0+smoothing_rate, axis=-1)
-          supervised_probs.append(one_hot_probs)
+          supervised_probs.append(pred_one_hot_probs)
+
+      used_heads.append(selected_gold_heads)
+      # update allowed_heads to make sure other attention head do not select these depheads
+      allowed_heads = allowed_heads - tf.one_hot(selected_gold_heads, to_seq_length, on_value=1, 
+                                                  off_value=0, axis=-1)
       
 
   if num_sup_heads == 1:
@@ -1207,7 +1227,8 @@ def top_k_heads(supervised_logits, allowed_heads, null_mask, n=4):
   # [B, F, T]
   allowed_head_cnt_3D = allowed_head_cnt + zeros
   # [B, F, T]
-  selected_gold_heads_3D = tf.where(tf.equal(allowed_head_cnt_3D,0), null_mask_3D, selected_gold_heads_3D)
+  #selected_gold_heads_3D = tf.where(tf.equal(allowed_head_cnt_3D,0), null_mask_3D, selected_gold_heads_3D)
+  selected_gold_heads_3D = tf.where(tf.equal(allowed_head_cnt_3D,0), zeros, selected_gold_heads_3D)
 
   return selected_gold_heads_3D
 

@@ -158,7 +158,9 @@ class EasyFirstNetwork(BaseNetwork):
                                                       sample_policy=self.sample_policy,
                                                       share_attention_params=self.share_attention_params,
                                                       maskout_fully_generated_sents=self.maskout_fully_generated_sents,
-                                                      use_prob_for_sup=self.use_prob_for_sup)
+                                                      use_prob_for_sup=self.use_prob_for_sup,
+                                                      gold_head_keep_prob=self.gold_head_keep_prob,
+                                                      remove_masked_gold_head=self.remove_masked_gold_head)
 
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
     outputs = {}
@@ -814,3 +816,9 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def do_eval_by_layer(self):
     return self._config.getboolean(self, 'do_eval_by_layer')
+  @property
+  def remove_masked_gold_head(self):
+    return self._config.getboolean(self, 'remove_masked_gold_head')
+  @property
+  def gold_head_keep_prob(self):
+    return self._config.getfloat(self, 'gold_head_keep_prob')
