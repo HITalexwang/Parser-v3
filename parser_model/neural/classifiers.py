@@ -73,6 +73,34 @@ def hiddens(layer, hidden_sizes, hidden_func=nonlin.relu, hidden_keep_prob=1.):
   return layers
 
 #===============================================================
+def dense_layer(layer, output_size, name=None, hidden_func=nonlin.relu, hidden_keep_prob=1.,
+                initializer=tf.orthogonal_initializer):
+  """
+  Apply dropout, dense layer and then activation func to input layer
+  Input:
+      layer: [batch_size, input_size]
+
+  Return:
+      layer: [batch_size, output_size]
+  """
+
+  layer_shape = nn.get_sizes(layer)
+  input_size = layer_shape.pop()
+  if hidden_keep_prob < 1.:
+    if len(layer_shape) > 1:
+      noise_shape = tf.stack(layer_shape[:-1] + [1, input_size])
+    else:
+      noise_shape = None
+    layer = nn.dropout(layer, hidden_keep_prob, noise_shape=noise_shape)
+  layer = tf.layers.dense(
+      layer,
+      output_size,
+      name=name,
+      kernel_initializer=initializer)
+  layer = hidden_func(layer)
+  return layer
+
+#===============================================================
 def linear_classifier(layer, output_size, hidden_keep_prob=1.):
   """"""
   

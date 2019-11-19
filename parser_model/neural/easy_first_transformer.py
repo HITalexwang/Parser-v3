@@ -885,26 +885,37 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
   #   n = `num_sup_heads`
   #   h = `arc_hidden_size`
 
-  # `query_layer` = [B*F, n*h], works as representation of dependent token
-  query_layer = tf.layers.dense(
-      from_tensor_2d,
-      num_sup_heads * arc_hidden_size,
-      name="graph_query",
-      kernel_initializer=create_initializer(initializer_range))
+  #query_layer = tf.layers.dense(
+  #    from_tensor_2d,
+  #    num_sup_heads * arc_hidden_size,
+  #    name="graph_query",
+  #    kernel_initializer=create_initializer(initializer_range))
+  # query_layer = [B*F, n*h], works as representation of dependent token
+  query_layer = classifiers.dense_layer(from_tensor_2d, num_sup_heads * arc_hidden_size, 
+                            name="graph_query", hidden_keep_prob=arc_hidden_keep_prob,
+                            initializer=create_initializer(initializer_range))
 
-  # `key_layer` = [B*T, n*h], works as representation of parent token
-  key_layer = tf.layers.dense(
-      to_tensor_2d,
-      num_sup_heads * arc_hidden_size,
-      name="graph_key",
-      kernel_initializer=create_initializer(initializer_range))
+  # key_layer = [B*T, n*h], works as representation of parent token
+  key_layer = classifiers.dense_layer(to_tensor_2d, num_sup_heads * arc_hidden_size, 
+                            name="graph_key", hidden_keep_prob=arc_hidden_keep_prob,
+                            initializer=create_initializer(initializer_range))
+  #key_layer = tf.layers.dense(
+  #    to_tensor_2d,
+  #    num_sup_heads * arc_hidden_size,
+  #    name="graph_key",
+  #    kernel_initializer=create_initializer(initializer_range))
 
-  # `value_layer` = [B*T, n*h]
-  value_layer = tf.layers.dense(
-      to_tensor_2d,
-      num_sup_heads * arc_hidden_size,
-      name="graph_value",
-      kernel_initializer=create_initializer(initializer_range))
+  # value_layer = [B*T, n*h]
+  value_layer = classifiers.dense_layer(to_tensor_2d, num_sup_heads * arc_hidden_size, 
+                            name="graph_value", hidden_keep_prob=arc_hidden_keep_prob,
+                            initializer=create_initializer(initializer_range))
+  #value_layer = tf.layers.dense(
+  #    to_tensor_2d,
+  #    num_sup_heads * arc_hidden_size,
+  #    name="graph_value",
+  #    kernel_initializer=create_initializer(initializer_range))
+
+  
 
   # `query_layer` = [B, n, F, h]
   query_layer = transpose_for_scores(query_layer, batch_size, num_sup_heads,
