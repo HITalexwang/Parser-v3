@@ -51,9 +51,11 @@ class EasyFirstTransformerConfig(object):
                arc_hidden_size=512,
                arc_hidden_add_linear=True,
                arc_hidden_keep_prob=0.67,
+               do_encode_rel = True,
                rel_hidden_size=512,
                rel_hidden_add_linear=True,
                rel_hidden_keep_prob=0.67,
+               rel_num=None,
                sample_policy='random',
                share_attention_params=True,
                maskout_fully_generated_sents=False,
@@ -104,9 +106,14 @@ class EasyFirstTransformerConfig(object):
     self.n_top_heads = n_top_heads
     self.use_biaffine = use_biaffine
     self.arc_hidden_size = arc_hidden_size
-    self.rel_hidden_size = rel_hidden_size
     self.arc_hidden_add_linear = arc_hidden_add_linear
     self.arc_hidden_keep_prob = arc_hidden_keep_prob
+    self.do_encode_rel = do_encode_rel
+    self.rel_hidden_size = rel_hidden_size
+    self.rel_hidden_add_linear = rel_hidden_add_linear
+    self.rel_hidden_keep_prob =rel_hidden_keep_prob
+    self.rel_num = rel_num
+    assert (self.rel_num) > 0
     self.sample_policy = sample_policy
     self.share_attention_params = share_attention_params
     self.maskout_fully_generated_sents = maskout_fully_generated_sents
@@ -118,6 +125,7 @@ class EasyFirstTransformerConfig(object):
             supervision, sample_policy, share_attention_params))
     print ("mask out fully generated sentences:{}\nuse probability for supervision matrix while predicting:{}".format(
             maskout_fully_generated_sents, use_prob_for_sup))
+    print ("encode label prediction in transformer:{}".format(do_encode_rel))
 
     assert supervision in ['easy-first', 'mask-bi', 'mask-uni', 'none', 'graph-bi', 'graph-uni']
 
@@ -176,6 +184,7 @@ class EasyFirstTransformer(object):
                input_tensor,
                input_mask=None,
                unlabeled_targets=None,
+               label_targets=None,
                null_mask=None,
                scope=None):
     """Constructor for GraphTransformer.
@@ -194,11 +203,13 @@ class EasyFirstTransformer(object):
     """
     config = copy.deepcopy(config)
     config.is_training = is_training
+    self.do_encode_rel = config.do_encode_rel
     if not is_training:
       config.hidden_dropout_prob = 0.0
       config.attention_probs_dropout_prob = 0.0
       config.acc_mask_dropout_prob = 0.0
       config.arc_hidden_keep_prob = 1.0
+      config.rel_hidden_keep_prob = 1.0
 
     input_shape = get_shape_list(input_tensor, expected_rank=3)
     batch_size = input_shape[0]
@@ -253,6 +264,7 @@ class EasyFirstTransformer(object):
             attention_mask=attention_mask,
             null_mask=null_mask,
             unlabeled_targets=unlabeled_targets,
+            label_targets=label_targets,
             hidden_size=config.hidden_size,
             num_hidden_layers=config.num_hidden_layers,
             num_attention_heads=config.num_attention_heads,
@@ -279,17 +291,24 @@ class EasyFirstTransformer(object):
   def get_all_encoder_layers(self):
     return self.all_encoder_layers
 
-  def get_outputs(self, do_eval_by_layer=False):
-    return self.compute_outputs(self.outputs,do_eval_by_layer=do_eval_by_layer)
+  def get_outputs(self, do_eval_by_layer=False, loss_interpolation=.5,
+                        optimize_by_layer=False):
+    return self.compute_outputs(self.outputs,do_eval_by_layer=do_eval_by_layer,
+                                loss_interpolation=loss_interpolation,
+                                optimize_by_layer=optimize_by_layer)
 
-  def compute_outputs(self, outputs, do_eval_by_layer=False):
+  def compute_outputs(self, outputs, do_eval_by_layer=False, loss_interpolation=.5,
+                        optimize_by_layer=False):
 
+    if optimize_by_layer:
+      outputs['losses_by_layer'] = outputs['unlabeled_loss']
+    outputs['unlabeled_loss'] = tf.add_n(outputs['unlabeled_loss'])
     # n_layers x [batch_size, seq_len, seq_len]
-    predictions = outputs['predictions']
+    predictions = outputs['unlabeled_predictions']
     # [batch_size, seq_len, seq_len]
     predictions = nn.greater(tf.add_n(predictions),0)
-    outputs['preds_by_layer'] = outputs['predictions']
-    outputs['predictions'] = predictions
+    outputs['unlabeled_by_layer'] = outputs['unlabeled_predictions']
+    outputs['unlabeled_predictions'] = predictions
     
     targets = outputs['unlabeled_targets']
     n_targets = tf.reduce_sum(targets)
@@ -299,7 +318,7 @@ class EasyFirstTransformer(object):
       outputs['n_acc_false_negatives'] = []
       #outputs['acc_loss_by_layer'] = []
       # [B, F, T] * [B, F, T] -> [B, F, T]
-      for n_layer, preds in enumerate(outputs['preds_by_layer']):
+      for n_layer, preds in enumerate(outputs['unlabeled_by_layer']):
         true_positives = preds * targets
         # [B, F, T] -> ()
         n_predictions = tf.reduce_sum(preds)
@@ -330,8 +349,72 @@ class EasyFirstTransformer(object):
     outputs['n_unlabeled_true_positives'] = n_true_positives
     outputs['n_unlabeled_false_positives'] = n_false_positives
     outputs['n_unlabeled_false_negatives'] = n_false_negatives
-    outputs['true_positives'] = true_positives
     outputs['n_correct_unlabeled_sequences'] = n_correct_sequences
+
+    if not self.do_encode_rel:
+      outputs['probabilities'] = tf.ones_like(outputs['unlabeled_probabilities'][0][0])
+      outputs['loss'] = outputs['unlabeled_loss']
+
+    if self.do_encode_rel:
+      label_targets = outputs['label_targets']
+      unlabeled_predictions = outputs['unlabeled_predictions']
+      unlabeled_targets = outputs['unlabeled_targets']
+      lab_preds_layers = outputs['label_predictions']
+      unlab_preds_layers = outputs['unlabeled_by_layer']
+      used_head_layers = outputs['used_heads']
+      label_predictions = []
+      correct_label_tokens_list = []
+      for unlab_preds, lab_preds, unlab_targets in zip(unlab_preds_layers, lab_preds_layers, used_head_layers):
+        true_positives = nn.equal(label_targets, lab_preds) * unlab_preds
+        correct_label_tokens = nn.equal(label_targets, lab_preds) * unlab_targets
+        label_predictions.append(lab_preds * unlab_preds)
+        correct_label_tokens_list.append(correct_label_tokens)
+
+        # (n x m x m) -> ()
+        n_unlab_preds = tf.reduce_sum(unlab_preds)
+        n_unlab_targets = tf.reduce_sum(unlab_targets)
+        n_true_positives = tf.reduce_sum(true_positives)
+        n_correct_label_tokens = tf.reduce_sum(correct_label_tokens)
+
+        # () - () -> ()
+        n_false_positives = n_unlab_preds - n_true_positives
+        n_false_negatives = n_unlab_targets - n_true_positives
+
+      label_predictions = tf.add_n(label_predictions)
+      correct_label_tokens = tf.add_n(correct_label_tokens_list)
+
+      true_positives = nn.equal(label_targets, label_predictions) * unlabeled_predictions
+      #correct_label_tokens = nn.equal(label_targets, label_predictions) * unlabeled_targets
+      # (n x m x m) -> ()
+      n_unlabeled_predictions = tf.reduce_sum(unlabeled_predictions)
+      n_unlabeled_targets = tf.reduce_sum(unlabeled_targets)
+      n_true_positives = tf.reduce_sum(true_positives)
+      n_correct_label_tokens = tf.reduce_sum(correct_label_tokens)
+      # () - () -> ()
+      n_false_positives = n_unlabeled_predictions - n_true_positives
+      n_false_negatives = n_unlabeled_targets - n_true_positives
+      # (n x m x m) -> (n)
+      n_targets_per_sequence = tf.reduce_sum(unlabeled_targets, axis=[1,2])
+      n_true_positives_per_sequence = tf.reduce_sum(true_positives, axis=[1,2])
+      n_correct_label_tokens_per_sequence = tf.reduce_sum(correct_label_tokens, axis=[1,2])
+      # (n) x 2 -> ()
+      n_correct_sequences = tf.reduce_sum(nn.equal(n_true_positives_per_sequence, n_targets_per_sequence))
+      n_correct_label_sequences = tf.reduce_sum(nn.equal(n_correct_label_tokens_per_sequence, n_targets_per_sequence))
+      
+      #-----------------------------------------------------------
+      # Populate the output dictionary
+      outputs['label_loss'] = tf.add_n(outputs['label_loss'])
+      rho = loss_interpolation
+      outputs['probabilities'] = outputs['label_probabilities']
+      outputs['loss'] = 2*((1-rho) * outputs['unlabeled_loss'] + rho * outputs['label_loss'])
+      
+      outputs['n_true_positives'] = n_true_positives
+      outputs['n_false_positives'] = n_false_positives
+      outputs['n_false_negatives'] = n_false_negatives
+      outputs['n_correct_sequences'] = n_correct_sequences
+      outputs['n_correct_label_tokens'] = n_correct_label_tokens
+      outputs['n_correct_label_sequences'] = n_correct_label_sequences
+
     return outputs
     
 
@@ -623,6 +706,7 @@ def attention_layer(from_tensor,
                     attention_mask=None,
                     null_mask=None,
                     remained_unlabeled_targets=None,
+                    label_targets=None,
                     num_attention_heads=1,
                     size_per_head=512,
                     query_act=None,
@@ -799,10 +883,11 @@ def attention_layer(from_tensor,
     # predictions: S * [B, F]
     # graph_context_layer: [B, F, n*h]
     losses, predictions, probabilities, graph_context_layer, used_heads, allowed_heads = easy_first_one_step(
-                                          config,
-                                          remained_unlabeled_targets, from_tensor_2d,
+                                          config, from_tensor_2d,
                                           to_tensor_2d, attention_mask, null_mask, batch_size,
-                                          from_seq_length, to_seq_length, 
+                                          from_seq_length, to_seq_length,
+                                          remained_unlabeled_targets=remained_unlabeled_targets, 
+                                          label_targets=label_targets,
                                           policy=config.sample_policy,
                                           use_biaffine=config.use_biaffine,
                                           arc_hidden_size = config.arc_hidden_size, rel_hidden_size = 512,
@@ -813,11 +898,19 @@ def attention_layer(from_tensor,
                                           add_linear=config.arc_hidden_add_linear,
                                           arc_hidden_keep_prob=config.arc_hidden_keep_prob,
                                           do_return_2d_tensor=do_return_2d_tensor)
-    outputs['acc_loss'] = tf.add_n(losses)
-    outputs['predictions'] = predictions
-    outputs['probabilities'] = probabilities
+    outputs['unlabeled_loss'] = tf.add_n(losses['arc'])
+    outputs['unlabeled_predictions'] = predictions['arc']
+    outputs['unlabeled_probabilities'] = probabilities['arc']
     outputs['used_heads'] = used_heads
     outputs['allowed_heads'] = allowed_heads
+    #outputs['acc_loss'] = tf.add_n(losses)
+    #outputs['predictions'] = predictions
+    #outputs['probabilities'] = probabilities
+    if config.do_encode_rel:
+      outputs['label_loss'] = losses['rel']
+      outputs['label_predictions'] = predictions['rel']
+      outputs['label_probabilities'] = probabilities['rel']
+    
 
   # Normalize the attention scores to probabilities.
   # `attention_probs` = [B, N, F, T]
@@ -856,9 +949,12 @@ def attention_layer(from_tensor,
 
   return context_layer, outputs
 
-def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_tensor_2d,
+def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
                       attention_mask, null_mask, batch_size, from_seq_length, 
-                      to_seq_length, use_biaffine=False, 
+                      to_seq_length, 
+                      remained_unlabeled_targets=None, 
+                      label_targets=None,
+                      use_biaffine=False, 
                       arc_hidden_size=512, rel_hidden_size=512,
                       num_sup_heads=1, n_top_heads=4, policy='random',
                       smoothing_rate=0.1, initializer_range=0.02,
@@ -885,37 +981,19 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
   #   n = `num_sup_heads`
   #   h = `arc_hidden_size`
 
-  #query_layer = tf.layers.dense(
-  #    from_tensor_2d,
-  #    num_sup_heads * arc_hidden_size,
-  #    name="graph_query",
-  #    kernel_initializer=create_initializer(initializer_range))
+  # Compute the arc
   # query_layer = [B*F, n*h], works as representation of dependent token
   query_layer = classifiers.dense_layer(from_tensor_2d, num_sup_heads * arc_hidden_size, 
                             name="graph_query", hidden_keep_prob=arc_hidden_keep_prob,
                             initializer=create_initializer(initializer_range))
-
   # key_layer = [B*T, n*h], works as representation of parent token
   key_layer = classifiers.dense_layer(to_tensor_2d, num_sup_heads * arc_hidden_size, 
                             name="graph_key", hidden_keep_prob=arc_hidden_keep_prob,
                             initializer=create_initializer(initializer_range))
-  #key_layer = tf.layers.dense(
-  #    to_tensor_2d,
-  #    num_sup_heads * arc_hidden_size,
-  #    name="graph_key",
-  #    kernel_initializer=create_initializer(initializer_range))
-
   # value_layer = [B*T, n*h]
   value_layer = classifiers.dense_layer(to_tensor_2d, num_sup_heads * arc_hidden_size, 
                             name="graph_value", hidden_keep_prob=arc_hidden_keep_prob,
                             initializer=create_initializer(initializer_range))
-  #value_layer = tf.layers.dense(
-  #    to_tensor_2d,
-  #    num_sup_heads * arc_hidden_size,
-  #    name="graph_value",
-  #    kernel_initializer=create_initializer(initializer_range))
-
-  
 
   # `query_layer` = [B, n, F, h]
   query_layer = transpose_for_scores(query_layer, batch_size, num_sup_heads,
@@ -944,6 +1022,10 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
                                   1.0 / math.sqrt(float(arc_hidden_size)))
 
   use_null_mask = True
+  # [B, F, T]
+  zeros = tf.zeros_like(attention_mask)
+  # [B, F, T]
+  null_mask_3D = tf.expand_dims(null_mask, axis=1) + zeros
   # [B, F, T] -> [B, F], use the second column, 
   # since the first column is all 0 padding for null token
   if use_null_mask:
@@ -957,10 +1039,10 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
   #  allowed_heads = tf.expand_dims(null_mask, axis=1) + remained_unlabeled_targets
   #else:
   allowed_heads = remained_unlabeled_targets
-  losses = []
-  predictions = []
+  arc_losses = []
+  arc_predictions = []
   supervised_probs = []
-  probabilities = []
+  arc_probabilities = []
   used_heads = []
   for i in range(num_sup_heads):
     # [B, F, T]
@@ -977,7 +1059,7 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
     elif policy == 'confidence':
       selected_gold_heads = confidence_sample(supervised_logits, allowed_heads, null_mask, from_seq_length)
       probability = tf.nn.softmax(supervised_logits) * tf.to_float(mask_with_null)
-    probabilities.append(probability)
+    arc_probabilities.append(probability)
     if config.maskout_fully_generated_sents:
       # [B, 1], the number of remained arcs of each sentence
       remained_arcs_cnt = tf.reduce_sum(tf.reduce_sum(remained_unlabeled_targets, axis=-1), axis=-1, keep_dims=True)
@@ -993,9 +1075,7 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
     if policy == 'top_k':
       add_null_for_words_with_no_head = False
       # [B, F, T]
-      zeros = tf.zeros_like(selected_gold_heads_3D)
-      # [B, F, T]
-      null_mask_3D = tf.expand_dims(null_mask, axis=1) + zeros
+      zeros = tf.zeros_like(attention_mask)
       if add_null_for_words_with_no_head:
         # [B, F, 1], the number of selected heads for each word
         selected_heads_cnt = tf.reduce_sum(selected_gold_heads_3D, axis=-1, keep_dims=True)
@@ -1016,10 +1096,10 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
       loss = tf.losses.sigmoid_cross_entropy(selected_gold_heads_3D_, supervised_logits,
                                               weights=attention_mask_3D,
                                               label_smoothing=smoothing_rate)
-      losses.append(loss)
+      arc_losses.append(loss)
       # [B, F, T] -> [B, F, T]
       prediction = nn.greater(supervised_logits, 0, dtype=tf.int32) * attention_mask
-      predictions.append(prediction)
+      arc_predictions.append(prediction)
 
       #print ('Is training:',config.is_training)
       if config.is_training:
@@ -1041,10 +1121,10 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
       # [B, F], [B, F, T], [B, F] -> ()
       loss = tf.losses.sparse_softmax_cross_entropy(selected_gold_heads, supervised_logits, 
                                                     weights=new_attention_mask)
-      losses.append(loss)
+      arc_losses.append(loss)
       # [B, F], the real prediction of attention head-i
       prediction = tf.argmax(supervised_logits, axis=-1, output_type=tf.int32)
-      predictions.append(prediction)
+      arc_predictions.append(prediction)
 
       pred_one_hot_probs = tf.one_hot(prediction, to_seq_length, on_value=1.0-smoothing_rate, 
                                   off_value=0.0+smoothing_rate, axis=-1)
@@ -1079,7 +1159,6 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
       allowed_heads = allowed_heads - tf.one_hot(selected_gold_heads, to_seq_length, on_value=1, 
                                                   off_value=0, axis=-1) * attention_mask
       
-
   if num_sup_heads == 1:
     # [B, F, T] -> [B, 1, F, T]
     stacked_supervised_probs = tf.expand_dims(supervised_probs[0], axis=1)
@@ -1103,31 +1182,125 @@ def easy_first_one_step(config, remained_unlabeled_targets, from_tensor_2d, to_t
   # `context_layer` = [B, F, n, h]
   graph_context_layer = tf.transpose(graph_context_layer, [0, 2, 1, 3])
 
+  if policy == 'top_k':
+    # S x [B, F, T] -> [B, F, T]
+    arc_predictions_ = nn.greater(tf.add_n(arc_predictions), 0) * attention_mask
+    # S x [B, F, T] -> [B, F, T]
+    used_heads_ = nn.greater(tf.add_n(used_heads), 0) * attention_mask
+  else:
+    # S x [B, F] -> [B, F, T]
+    arc_predictions = gather_subgraphs(arc_predictions) 
+    arc_predictions_ = arc_predictions * attention_mask
+    # S x [B, F] -> [B, F, T]
+    used_heads = gather_subgraphs(used_heads)
+    used_heads_ = used_heads * attention_mask
+
+  # Compute the label
+  if config.do_encode_rel:
+    rel_hidden_size = config.rel_hidden_size
+    rel_hidden_keep_prob = config.rel_hidden_keep_prob
+    with tf.variable_scope("Labeled"):
+      # query_layer = [B*F, h], works as representation of dependent token
+      rel_dep_layer = classifiers.dense_layer(from_tensor_2d, rel_hidden_size, 
+                            name="rel_dep", hidden_keep_prob=rel_hidden_keep_prob,
+                            initializer=create_initializer(initializer_range))
+
+      # key_layer = [B*T, h], works as representation of parent token
+      rel_head_layer = classifiers.dense_layer(to_tensor_2d, rel_hidden_size, 
+                            name="rel_head", hidden_keep_prob=rel_hidden_keep_prob,
+                            initializer=create_initializer(initializer_range))
+      # [B, F, h]
+      rel_dep_layer = tf.reshape(rel_dep_layer, [batch_size, from_seq_length, rel_hidden_size])
+      rel_head_layer = tf.reshape(rel_head_layer, [batch_size, to_seq_length, rel_hidden_size])
+
+      with tf.variable_scope('Classifier'):
+        # R: the relation number
+        # logits: [B, F, R, T]
+        # rel_layer: [B, F, R, h]
+        logits, rel_layer = classifiers.bilinear_classifier2(
+                                  rel_dep_layer, rel_head_layer, config.rel_num,
+                                  hidden_keep_prob=rel_hidden_keep_prob,
+                                  add_linear=config.rel_hidden_add_linear)
+        # [B, F, T]
+        unlabeled_predictions = arc_predictions
+        unlabeled_targets = used_heads
+        # Process the logits
+        # [B, F, R, T] -> [B, F, T, R]
+        transposed_logits = tf.transpose(logits, [0,1,3,2])
+    
+        #-----------------------------------------------------------
+        # Compute the probabilities/cross entropy
+        # [B, F, T, R] -> [B, F, T, R]
+        rel_probabilities = tf.nn.softmax(transposed_logits) * tf.to_float(tf.expand_dims(attention_mask, axis=-1))
+        # [B, F, T], [B, F, T, R], [B, F, T] -> ()
+        rel_loss = tf.losses.sparse_softmax_cross_entropy(label_targets, transposed_logits, 
+                                                    weights=attention_mask*unlabeled_targets)
+        #-----------------------------------------------------------
+        # Compute the predictions
+        # [B, F, T, R] -> [B, F, T]
+        rel_predictions = tf.argmax(transposed_logits, axis=-1, output_type=tf.int32)
+      # this is defined in basevocab
+      null_label_index = 3
+      # [B, F, T]
+      null_label_indices = tf.ones_like(rel_predictions) * null_label_index
+
+      #if config.is_training:
+      if False:
+        label_indices = tf.where(tf.equal(label_targets,0), null_label_indices, label_targets) * (attention_mask + null_mask_3D)
+        # [B, F, T] -> [B, F, T, R]
+        rel_pred_onehot1 = tf.one_hot(label_indices, config.rel_num, on_value=1.0, off_value=0.0, axis=-1)
+        # [B, F, T, R] * [B, F, T, 1] -> [B, F, T, R]
+        rel_pred_onehot2 = rel_pred_onehot1 * tf.to_float(tf.expand_dims(unlabeled_targets,axis=-1))
+      else:
+        label_indices = tf.where(tf.equal(rel_predictions,0), null_label_indices, rel_predictions) * (attention_mask + null_mask_3D)
+        # [B, F, T] -> [B, F, T, R]
+        rel_pred_onehot1 = tf.one_hot(label_indices, config.rel_num, on_value=1.0, off_value=0.0, axis=-1)
+        # [B, F, T, R] * [B, F, T, 1] -> [B, F, T, R]
+        rel_pred_onehot2 = rel_pred_onehot1 * tf.to_float(tf.expand_dims(unlabeled_predictions,axis=-1))
+      # same as in classifiers.bilinear_classifier2
+      rel_pred_size = rel_hidden_size + config.rel_hidden_add_linear
+      # [B*F, R*h] -> [B*F, R, h]
+      rel_layer = tf.reshape(rel_layer, tf.stack([-1,config.rel_num,rel_pred_size]))
+      # [B, F, T, R] -> [B*F, T, R]
+      rel_pred_onehot = tf.reshape(rel_pred_onehot2, tf.stack([-1,to_seq_length,config.rel_num]))
+      # [B*F, T, R] * [B*F, R, h] -> [B*F, T, h]
+      rel_layer = tf.matmul(rel_pred_onehot, rel_layer)
+      # [B*F, T, h] -> [B*F, h]
+      rel_layer = tf.reduce_sum(rel_layer, axis=-2)
+      
   if do_return_2d_tensor:
     # `context_layer` = [B*F, n*h]
     graph_context_layer = tf.reshape(
         graph_context_layer,
         [batch_size * from_seq_length, num_sup_heads * arc_hidden_size])
+    if config.do_encode_rel:
+      # [B*F, n*arc_h + rel_h]
+      graph_context_layer = tf.concat([graph_context_layer, rel_layer], axis=-1)
   else:
     # `context_layer` = [B, F, n*h]
     graph_context_layer = tf.reshape(
         graph_context_layer,
         [batch_size, from_seq_length, num_sup_heads * arc_hidden_size])
+    if config.do_encode_rel:
+      # [B, F, rel_h]
+      rel_layer = tf.reshape(rel_layer, [batch_size, from_seq_length, rel_hidden_size])
+      # [B, F, n*arc_h + rel_h]
+      graph_context_layer = tf.concat([graph_context_layer, rel_layer], axis=-1)
 
-  if policy == 'top_k':
-    # S x [B, F, T] -> [B, F, T]
-    predictions_ = nn.greater(tf.add_n(predictions), 0) * attention_mask
-    # S x [B, F, T] -> [B, F, T]
-    used_heads_ = nn.greater(tf.add_n(used_heads), 0) * attention_mask
-  else:
-    # S x [B, F] -> [B, F, T]
-    predictions_ = gather_subgraphs(predictions, attention_mask)
-    # S x [B, F] -> [B, F, T]
-    used_heads_ = gather_subgraphs(used_heads, attention_mask)
+  preds = {}
+  probs = {}
+  losses = {}
+  preds['arc'] = arc_predictions_
+  probs['arc'] = arc_probabilities
+  losses['arc'] = arc_losses
+  if config.do_encode_rel:
+    preds['rel'] = rel_predictions
+    probs['rel'] = rel_probabilities
+    losses['rel'] = rel_loss
 
-  return losses, predictions_, probabilities, graph_context_layer, used_heads_, allowed_heads
+  return losses, preds, probs, graph_context_layer, used_heads_, allowed_heads
 
-def gather_subgraphs(head_index_list, attention_mask):
+def gather_subgraphs(head_index_list):
   """
   Input:
     head_index_list: n_sup_heads x [B, F]
@@ -1141,7 +1314,7 @@ def gather_subgraphs(head_index_list, attention_mask):
     one_hot_matrix = tf.one_hot(head_index_list[i], seq_len, on_value=1, off_value=0, axis=-1)
     matrices.append(one_hot_matrix)
   # [B, F, T]
-  gathered_graph = nn.greater(tf.add_n(matrices), 0) * attention_mask
+  gathered_graph = nn.greater(tf.add_n(matrices), 0)
   return gathered_graph
 
 def confidence_sample(supervised_logits, allowed_heads, null_mask, seq_len):
@@ -1273,6 +1446,7 @@ def easy_first_transformer_model(input_tensor,
                       attention_mask=None,
                       null_mask=None,
                       unlabeled_targets=None,
+                      label_targets=None,
                       hidden_size=512,
                       num_hidden_layers=6,
                       num_attention_heads=6,
@@ -1345,10 +1519,10 @@ def easy_first_transformer_model(input_tensor,
   prev_output = reshape_to_matrix(input_tensor)
 
   all_layer_outputs = []
-  outputs = {'acc_loss':[], 'probabilities':[], 'predictions':[], 
-            'unlabeled_targets':unlabeled_targets, 'used_heads':[],
-            'allowed_heads':[]}
-
+  outputs = {'unlabeled_loss':[], 'unlabeled_probabilities':[], 'unlabeled_predictions':[], 
+            'label_loss':[], 'label_predictions':[], 'label_probabilities':[],
+            'unlabeled_targets':unlabeled_targets, 'label_targets':label_targets,
+            'used_heads':[], 'allowed_heads':[]}
 
   # here the unlabeled_targets is the graph adjacency matrix
   remained_unlabeled_targets = unlabeled_targets
@@ -1373,6 +1547,7 @@ def easy_first_transformer_model(input_tensor,
               attention_mask=attention_mask,
               null_mask=null_mask,
               remained_unlabeled_targets=remained_unlabeled_targets,
+              label_targets=label_targets,
               num_attention_heads=num_attention_heads,
               size_per_head=attention_head_size,
               attention_probs_dropout_prob=attention_probs_dropout_prob,

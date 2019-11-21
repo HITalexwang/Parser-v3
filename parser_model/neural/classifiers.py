@@ -230,6 +230,50 @@ def batch_bilinear_classifier(layer1, layer2, output_size, hidden_keep_prob, add
   return layer
 
 #===============================================================
+def bilinear_classifier2(layer1, layer2, output_size, hidden_keep_prob=1., add_linear=True):
+  """"""
+  
+  layer_shape = nn.get_sizes(layer1)
+  bucket_size = layer_shape[-2]
+  input1_size = layer_shape.pop()+add_linear
+  input2_size = layer2.get_shape().as_list()[-1]+add_linear
+  ones_shape = tf.stack(layer_shape + [1])
+  
+  weights = tf.get_variable('Weights', shape=[input1_size, output_size, input2_size], initializer=tf.zeros_initializer)
+  if hidden_keep_prob < 1.:
+    noise_shape1 = tf.stack(layer_shape[:-1] + [1, input1_size-add_linear])
+    noise_shape2 = tf.stack(layer_shape[:-1] + [1, input2_size-add_linear])
+    layer1 = nn.dropout(layer1, hidden_keep_prob, noise_shape=noise_shape1)
+    layer2 = nn.dropout(layer2, hidden_keep_prob, noise_shape=noise_shape2)
+  if add_linear:
+    ones = tf.ones(ones_shape)
+    layer1 = tf.concat([layer1, ones], -1)
+    layer2 = tf.concat([layer2, ones], -1)
+    biases = 0
+  else:
+    biases = tf.get_variable('Biases', shape=[output_size], initializer=tf.zeros_initializer)
+    # (o) -> (o x 1)
+    biases = nn.reshape(biases, [output_size, 1])
+  
+  # (n x m x d) -> (nm x d)
+  layer1 = nn.reshape(layer1, [-1, input1_size])
+  # (n x m x d) -> (n x m x d)
+  layer2 = nn.reshape(layer2, [-1, bucket_size, input2_size])
+  # (d x o x d) -> (d x od)
+  weights = nn.reshape(weights, [input1_size, output_size*input2_size])
+  
+  # (nm x d) * (d x od) -> (nm x od)
+  layer_rel = tf.matmul(layer1, weights)
+  # (nm x od) -> (n x mo x d)
+  layer = nn.reshape(layer_rel, [-1, bucket_size*output_size, input2_size])
+  # (n x mo x d) * (n x m x d) -> (n x mo x m)
+  layer = tf.matmul(layer, layer2, transpose_b=True)
+  # (n x mo x m) -> (n x m x o x m)
+  layer = nn.reshape(layer, layer_shape + [output_size, bucket_size]) + biases
+  # (n x m x o x m), (n x m x o x d)
+  return layer, nn.reshape(layer_rel, [-1, bucket_size, output_size, input2_size])
+
+#===============================================================
 def bilinear_classifier(layer1, layer2, output_size, hidden_keep_prob=1., add_linear=True):
   """"""
   

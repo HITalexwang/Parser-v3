@@ -571,9 +571,11 @@ class GraphOutputs(object):
     #print ('remained heads:\n',outputs['semgraph']['allowed_heads'])
     #print ('used heads(y):\n',outputs['semgraph']['used_heads'])
     if show:
+      import numpy
+      numpy.set_printoptions(threshold=numpy.nan)
       print ('remained heads:\n',outputs['semgraph']['allowed_heads'])
       print ('used heads(y):\n',outputs['semgraph']['used_heads'])
-      print ('pred by layers:\n',outputs['semgraph']['preds_by_layer'])
+      print ('pred by layers:\n',outputs['semgraph']['unlabeled_by_layer'])
       print ('sumed preds:\n',outputs['semgraph']['predictions'])
 
     self.history['total']['total_time'] += time.time() - self.time
@@ -599,7 +601,7 @@ class GraphOutputs(object):
         self.history['semgraph']['fn_tokens'] += output['n_false_negatives']
         self.history['semgraph']['sequences'][-1] += output['n_correct_sequences']
         if 'accessible' in self.history:
-          self.history['accessible']['loss'][-1] += output['acc_loss']
+          self.history['accessible']['loss'][-1] += output['unlabeled_loss']
           if 'fp_tokens' in self.history['accessible']:
             if isinstance(self.history['accessible']['fp_tokens'], list):
               for i in range(len(self.history['accessible']['fp_tokens'])):
