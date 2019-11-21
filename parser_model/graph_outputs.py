@@ -94,6 +94,8 @@ class GraphOutputs(object):
       self._probabilities[field] = outputs[field].pop('probabilities')
       if 'unlabeled_probabilities' in outputs[field]:
         self._probabilities['semhead'] = outputs[field].pop('unlabeled_probabilities')
+      if 'label_probabilities' in outputs[field]:
+        self._probabilities['semrel'] = outputs[field].pop('label_probabilities')
       self._accuracies[field] = outputs[field]
 
     #-----------------------------------------------------------
@@ -173,7 +175,8 @@ class GraphOutputs(object):
     return
   
   #=============================================================
-  def probs_to_preds(self, probabilities, lengths, augment_layers=None, policy='confidence'):
+  def probs_to_preds(self, probabilities, lengths, augment_layers=None, policy='confidence',
+                      do_encode_rel=False):
     """"""
 
     predictions = {}
@@ -253,7 +256,11 @@ class GraphOutputs(object):
         semgraph_preds = self.sem16decoder(semgraph_probs, lengths)
       elif self._factored_semgraph and self.decoder == 'easy-first':
         assert 'semhead' in probabilities
-        predictions['semrel'] = self.easyfirst_decoder(probabilities['semhead'], semgraph_probs, lengths,
+        if do_encode_rel:
+          assert 'semrel' in probabilities
+          predictions['semrel'] = self.easyfirst_rel_decoder(probabilities['semhead'], probabilities['semrel'], lengths)
+        else:
+          predictions['semrel'] = self.easyfirst_decoder(probabilities['semhead'], semgraph_probs, lengths,
                                                         policy=policy)
         predictions['semhead'] = []
         return predictions
@@ -281,6 +288,41 @@ class GraphOutputs(object):
             if pred:
               sparse_semgraph_preds[-1][-1].append((k, semgraph_preds[i,j,k]))
     return predictions
+
+  def easyfirst_rel_decoder(self, semhead_probs, semrel_probs, lengths):
+    #print (len(semhead_probs), len(semhead_probs[0]), semhead_probs[0][0].shape)
+    # remove the null token
+    seq_len = semrel_probs[0].shape[-2] - 1
+    batch_size = semrel_probs[0].shape[0]
+    sparse_semgraph_preds = [[[] for _ in range(seq_len)] 
+                                  for _ in range(batch_size)]
+    # collect heads from each layer and each attention head
+    # for each attention layer
+    for n_layer, (head_probs, rel_probs) in enumerate(zip(semhead_probs,semrel_probs)):
+      # (n x m x m x c) -> (n x m x m)
+      semrel_preds = np.argmax(rel_probs, axis=-1)[:,1:,:]
+      #print ('semrel_preds:\n',semrel_preds)
+      # for each attention head
+      for h, probs in enumerate(head_probs):
+        # remove the null token at 0 
+        head_indices = np.argmax(probs, axis=-1)[:,1:]
+        #print (probs)
+        #print (head_indices)
+        # the i-th sentence in the batch
+        for i, heads in enumerate(head_indices):
+          for j, head in enumerate(heads):
+            if head > 0:
+              head_exists = False
+              # do not add duplicate arc
+              for h_, s in sparse_semgraph_preds[i][j]:
+                if h_ == head-1:
+                  head_exists = True
+                  break
+              if not head_exists:
+                # substract the index of null token, so null token == -1
+                sparse_semgraph_preds[i][j].append((head-1,semrel_preds[i,j,head]))
+    #print (sparse_semgraph_preds)
+    return sparse_semgraph_preds
 
   def easyfirst_decoder(self, semhead_probs, semrel_probs, lengths, policy='confidence'):
     #print (len(semhead_probs), len(semhead_probs[0]), semhead_probs[0][0].shape)
@@ -575,8 +617,10 @@ class GraphOutputs(object):
       numpy.set_printoptions(threshold=numpy.nan)
       print ('remained heads:\n',outputs['semgraph']['allowed_heads'])
       print ('used heads(y):\n',outputs['semgraph']['used_heads'])
-      print ('pred by layers:\n',outputs['semgraph']['unlabeled_by_layer'])
-      print ('sumed preds:\n',outputs['semgraph']['predictions'])
+      print ('unlabeled by layer:\n',outputs['semgraph']['unlabeled_by_layer'])
+      print ('label by layer:\n',outputs['semgraph']['label_by_layer'])
+      print ('sumed unlabeled:\n',outputs['semgraph']['unlabeled_predictions'])
+      print ('sumed label:\n',outputs['semgraph']['label_predictions'])
 
     self.history['total']['total_time'] += time.time() - self.time
     self.time = None

@@ -154,7 +154,8 @@ class EasyFirstNetwork(BaseNetwork):
                                                       arc_hidden_size=self.arc_hidden_size,
                                                       arc_hidden_add_linear=self.arc_hidden_add_linear,
                                                       arc_hidden_keep_prob=self.arc_hidden_keep_prob,
-                                                      do_encode_rel = self.do_encode_rel,
+                                                      do_encode_rel=self.do_encode_rel,
+                                                      encode_gold_rel_while_training=self.encode_gold_rel_while_training,
                                                       rel_hidden_size=self.rel_hidden_size,
                                                       rel_hidden_add_linear=self.rel_hidden_add_linear,
                                                       rel_hidden_keep_prob=self.rel_hidden_keep_prob,
@@ -709,7 +710,8 @@ class EasyFirstNetwork(BaseNetwork):
         feed_dict = dataset.set_placeholders(indices)
         probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
         predictions = graph_outputs.probs_to_preds(probabilities, lengths, augment_layers=augment_layers,
-                                                    policy=self.sample_policy)
+                                                    policy=self.sample_policy,
+                                                    do_encode_rel=self.do_encode_rel)
         tokens.update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
         graph_outputs.cache_predictions(tokens, indices)
 
@@ -840,3 +842,6 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def gold_head_keep_prob(self):
     return self._config.getfloat(self, 'gold_head_keep_prob')
+  @property
+  def encode_gold_rel_while_training(self):
+    return self._config.getboolean(self, 'encode_gold_rel_while_training')

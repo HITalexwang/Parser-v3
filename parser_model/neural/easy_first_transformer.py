@@ -52,6 +52,7 @@ class EasyFirstTransformerConfig(object):
                arc_hidden_add_linear=True,
                arc_hidden_keep_prob=0.67,
                do_encode_rel = True,
+               encode_gold_rel_while_training=False,
                rel_hidden_size=512,
                rel_hidden_add_linear=True,
                rel_hidden_keep_prob=0.67,
@@ -109,6 +110,7 @@ class EasyFirstTransformerConfig(object):
     self.arc_hidden_add_linear = arc_hidden_add_linear
     self.arc_hidden_keep_prob = arc_hidden_keep_prob
     self.do_encode_rel = do_encode_rel
+    self.encode_gold_rel_while_training = encode_gold_rel_while_training
     self.rel_hidden_size = rel_hidden_size
     self.rel_hidden_add_linear = rel_hidden_add_linear
     self.rel_hidden_keep_prob =rel_hidden_keep_prob
@@ -380,10 +382,17 @@ class EasyFirstTransformer(object):
         n_false_positives = n_unlab_preds - n_true_positives
         n_false_negatives = n_unlab_targets - n_true_positives
 
-      label_predictions = tf.add_n(label_predictions)
+      outputs['label_by_layer'] = label_predictions
+      label_prediction = label_predictions[0]
+      # prevent the situation when multiple attention layer have overlapped prediction
+      # always keep the ealier predicted labels
+      for lab_preds in label_predictions[1:]:
+        label_prediction = label_prediction + lab_preds * (1-nn.greater(label_prediction,0))
+      #label_predictions = tf.add_n(label_predictions)
+      outputs['label_predictions'] = label_prediction
       correct_label_tokens = tf.add_n(correct_label_tokens_list)
 
-      true_positives = nn.equal(label_targets, label_predictions) * unlabeled_predictions
+      true_positives = nn.equal(label_targets, label_prediction) * unlabeled_predictions
       #correct_label_tokens = nn.equal(label_targets, label_predictions) * unlabeled_targets
       # (n x m x m) -> ()
       n_unlabeled_predictions = tf.reduce_sum(unlabeled_predictions)
@@ -1244,8 +1253,8 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
       # [B, F, T]
       null_label_indices = tf.ones_like(rel_predictions) * null_label_index
 
-      #if config.is_training:
-      if False:
+      if config.is_training and config.encode_gold_rel_while_training:
+      #if False:
         label_indices = tf.where(tf.equal(label_targets,0), null_label_indices, label_targets) * (attention_mask + null_mask_3D)
         # [B, F, T] -> [B, F, T, R]
         rel_pred_onehot1 = tf.one_hot(label_indices, config.rel_num, on_value=1.0, off_value=0.0, axis=-1)
