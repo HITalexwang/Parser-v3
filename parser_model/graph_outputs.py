@@ -55,7 +55,8 @@ class GraphOutputs(object):
                     ('semgraph', 'LF1')]
   
   #=============================================================
-  def __init__(self, outputs, tokens, load=False, evals=None, factored_deptree=None, factored_semgraph=None, config=None):
+  def __init__(self, outputs, tokens, load=False, evals=None, factored_deptree=None, 
+                factored_semgraph=None, config=None, loss_interpolation=.5):
     """"""
     
     self._factored_deptree = factored_deptree
@@ -67,6 +68,8 @@ class GraphOutputs(object):
     self._accuracies = {'total': tokens}
     self._probabilities = {}
     self.time = None
+
+    self._loss_interpolation = loss_interpolation
     
     # Store the predicted graph matrix at each attention layer
     if 'acc' in outputs:
@@ -850,7 +853,7 @@ class GraphOutputs(object):
     return self._config.getstr(self, 'decoder')
   @property
   def loss_interpolation(self):
-    return self._config.getfloat(self, 'loss_interpolation')
+    return self._loss_interpolation
   @property
   def losses_by_layer(self):
     return self._losses_by_layer

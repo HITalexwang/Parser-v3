@@ -294,12 +294,14 @@ class EasyFirstNetwork(BaseNetwork):
     with tf.variable_scope(self.classname, reuse=False):
       train_graph = self.build_graph(input_network_outputs=input_network_outputs, reuse=False)
       train_outputs = TrainOutputs(*train_graph, load=load, evals=self._evals, \
-                                   factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+                                   factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, 
+                                   config=self._config, loss_interpolation=self.loss_interpolation)
 
     with tf.variable_scope(self.classname, reuse=True):
       dev_graph = self.build_graph(input_network_outputs=input_network_outputs, reuse=True)
       dev_outputs = DevOutputs(*dev_graph, load=load, evals=self._evals, \
-                               factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+                               factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, 
+                               config=self._config, loss_interpolation=self.loss_interpolation)
 
     regularization_loss = self.l2_reg * tf.losses.get_regularization_loss() if self.l2_reg else 0
 
@@ -658,7 +660,9 @@ class EasyFirstNetwork(BaseNetwork):
     with Timer('Building TF'):
       with tf.variable_scope(self.classname, reuse=False):
         parse_graph = self.build_graph(reuse=True)
-        parse_outputs = DevOutputs(*parse_graph, load=False, factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, config=self._config)
+        parse_outputs = DevOutputs(*parse_graph, load=False, factored_deptree=factored_deptree, 
+                                    factored_semgraph=factored_semgraph, config=self._config,
+                                    loss_interpolation=self.loss_interpolation)
       parse_tensors = parse_outputs.accuracies
       all_variables = set(tf.global_variables())
       non_save_variables = set(tf.get_collection('non_save_variables'))
@@ -845,3 +849,7 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def encode_gold_rel_while_training(self):
     return self._config.getboolean(self, 'encode_gold_rel_while_training')
+  @property
+  def loss_interpolation(self):
+    output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
+    return output_fields['semrel'].loss_interpolation
