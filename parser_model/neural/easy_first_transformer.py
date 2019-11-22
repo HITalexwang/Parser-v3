@@ -53,6 +53,7 @@ class EasyFirstTransformerConfig(object):
                arc_hidden_keep_prob=0.67,
                do_encode_rel = True,
                encode_gold_rel_while_training=False,
+               mask_rel_loss_with_global_graph=True,
                rel_hidden_size=512,
                rel_hidden_add_linear=True,
                rel_hidden_keep_prob=0.67,
@@ -111,6 +112,7 @@ class EasyFirstTransformerConfig(object):
     self.arc_hidden_keep_prob = arc_hidden_keep_prob
     self.do_encode_rel = do_encode_rel
     self.encode_gold_rel_while_training = encode_gold_rel_while_training
+    self.mask_rel_loss_with_global_graph = mask_rel_loss_with_global_graph
     self.rel_hidden_size = rel_hidden_size
     self.rel_hidden_add_linear = rel_hidden_add_linear
     self.rel_hidden_keep_prob =rel_hidden_keep_prob
@@ -715,6 +717,7 @@ def attention_layer(from_tensor,
                     attention_mask=None,
                     null_mask=None,
                     remained_unlabeled_targets=None,
+                    unlabeled_targets=None,
                     label_targets=None,
                     num_attention_heads=1,
                     size_per_head=512,
@@ -896,6 +899,7 @@ def attention_layer(from_tensor,
                                           to_tensor_2d, attention_mask, null_mask, batch_size,
                                           from_seq_length, to_seq_length,
                                           remained_unlabeled_targets=remained_unlabeled_targets, 
+                                          unlabeled_targets=unlabeled_targets,
                                           label_targets=label_targets,
                                           policy=config.sample_policy,
                                           use_biaffine=config.use_biaffine,
@@ -962,6 +966,7 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
                       attention_mask, null_mask, batch_size, from_seq_length, 
                       to_seq_length, 
                       remained_unlabeled_targets=None, 
+                      unlabeled_targets=None,
                       label_targets=None,
                       use_biaffine=False, 
                       arc_hidden_size=512, rel_hidden_size=512,
@@ -1232,7 +1237,6 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
                                   add_linear=config.rel_hidden_add_linear)
         # [B, F, T]
         unlabeled_predictions = arc_predictions
-        unlabeled_targets = used_heads
         # Process the logits
         # [B, F, R, T] -> [B, F, T, R]
         transposed_logits = tf.transpose(logits, [0,1,3,2])
@@ -1241,9 +1245,13 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
         # Compute the probabilities/cross entropy
         # [B, F, T, R] -> [B, F, T, R]
         rel_probabilities = tf.nn.softmax(transposed_logits) * tf.to_float(tf.expand_dims(attention_mask, axis=-1))
+        if config.mask_rel_loss_with_global_graph:
+          loss_weights = attention_mask*unlabeled_targets
+        else:
+          loss_weights = attention_mask*used_heads
         # [B, F, T], [B, F, T, R], [B, F, T] -> ()
         rel_loss = tf.losses.sparse_softmax_cross_entropy(label_targets, transposed_logits, 
-                                                    weights=attention_mask*unlabeled_targets)
+                                                    weights=loss_weights)
         #-----------------------------------------------------------
         # Compute the predictions
         # [B, F, T, R] -> [B, F, T]
@@ -1259,7 +1267,7 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
         # [B, F, T] -> [B, F, T, R]
         rel_pred_onehot1 = tf.one_hot(label_indices, config.rel_num, on_value=1.0, off_value=0.0, axis=-1)
         # [B, F, T, R] * [B, F, T, 1] -> [B, F, T, R]
-        rel_pred_onehot2 = rel_pred_onehot1 * tf.to_float(tf.expand_dims(unlabeled_targets,axis=-1))
+        rel_pred_onehot2 = rel_pred_onehot1 * tf.to_float(tf.expand_dims(used_heads,axis=-1))
       else:
         label_indices = tf.where(tf.equal(rel_predictions,0), null_label_indices, rel_predictions) * (attention_mask + null_mask_3D)
         # [B, F, T] -> [B, F, T, R]
@@ -1556,6 +1564,7 @@ def easy_first_transformer_model(input_tensor,
               attention_mask=attention_mask,
               null_mask=null_mask,
               remained_unlabeled_targets=remained_unlabeled_targets,
+              unlabeled_targets=unlabeled_targets,
               label_targets=label_targets,
               num_attention_heads=num_attention_heads,
               size_per_head=attention_head_size,

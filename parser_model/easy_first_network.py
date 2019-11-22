@@ -156,6 +156,7 @@ class EasyFirstNetwork(BaseNetwork):
                                                       arc_hidden_keep_prob=self.arc_hidden_keep_prob,
                                                       do_encode_rel=self.do_encode_rel,
                                                       encode_gold_rel_while_training=self.encode_gold_rel_while_training,
+                                                      mask_rel_loss_with_global_graph=self.mask_rel_loss_with_global_graph,
                                                       rel_hidden_size=self.rel_hidden_size,
                                                       rel_hidden_add_linear=self.rel_hidden_add_linear,
                                                       rel_hidden_keep_prob=self.rel_hidden_keep_prob,
@@ -849,6 +850,9 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def encode_gold_rel_while_training(self):
     return self._config.getboolean(self, 'encode_gold_rel_while_training')
+  @property
+  def mask_rel_loss_with_global_graph(self):
+    return self._config.getboolean(self, 'mask_rel_loss_with_global_graph')
   @property
   def loss_interpolation(self):
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
