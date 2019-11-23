@@ -64,7 +64,8 @@ class EasyFirstTransformerConfig(object):
                maskout_fully_generated_sents=False,
                use_prob_for_sup=False,
                gold_head_keep_prob=1,
-               remove_masked_gold_head=False):
+               remove_masked_gold_head=False,
+               add_eye_to_sup_probs=False):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -126,6 +127,7 @@ class EasyFirstTransformerConfig(object):
     self.use_prob_for_sup = use_prob_for_sup
     self.gold_head_keep_prob = gold_head_keep_prob
     self.remove_masked_gold_head = remove_masked_gold_head
+    self.add_eye_to_sup_probs = add_eye_to_sup_probs
 
     print ("supervision type: {}\nsample policy: {}\nshare attention parameters: {}".format(
             supervision, sample_policy, share_attention_params))
@@ -1160,15 +1162,20 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
             prob_mask_2D = tf.squeeze(prob_mask, axis=-1)
             # [B, F], remove the masked gold head from used_heads
             selected_gold_heads = tf.cast(prob_mask_2D, tf.int32) * selected_gold_heads
-        #eyes = tf.eye(to_seq_length)
-        #augmented_probs = one_hot_probs * (1-eyes) + eyes
-        supervised_probs.append(gold_one_hot_probs)
+        #supervised_probs.append(gold_one_hot_probs)
+        sup_probs = gold_one_hot_probs
       else:
         if config.use_prob_for_sup:
           # probability: [B, F, T]
-          supervised_probs.append(probability)
+          #supervised_probs.append(probability)
+          sup_probs = probability
         else:
-          supervised_probs.append(pred_one_hot_probs)
+          #supervised_probs.append(pred_one_hot_probs)
+          sup_probs = pred_one_hot_probs
+      if config.add_eye_to_sup_probs:
+        eyes = tf.eye(to_seq_length)
+        sup_probs = tf.nn.softmax(sup_probs * (1-eyes) + eyes)
+      supervised_probs.append(sup_probs)
 
       used_heads.append(selected_gold_heads)
       # update allowed_heads to make sure other attention head do not select these depheads

@@ -167,7 +167,8 @@ class EasyFirstNetwork(BaseNetwork):
                                                       maskout_fully_generated_sents=self.maskout_fully_generated_sents,
                                                       use_prob_for_sup=self.use_prob_for_sup,
                                                       gold_head_keep_prob=self.gold_head_keep_prob,
-                                                      remove_masked_gold_head=self.remove_masked_gold_head)
+                                                      remove_masked_gold_head=self.remove_masked_gold_head,
+                                                      add_eye_to_sup_probs=self.add_eye_to_sup_probs)
 
     with tf.variable_scope('Transformer'):
       # shape = [batch_size, seq_len, seq_len]
@@ -857,6 +858,9 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def mask_rel_loss_with_global_graph(self):
     return self._config.getboolean(self, 'mask_rel_loss_with_global_graph')
+  @property
+  def add_eye_to_sup_probs(self):
+    return self._config.getboolean(self, 'add_eye_to_sup_probs')
   @property
   def loss_interpolation(self):
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}
