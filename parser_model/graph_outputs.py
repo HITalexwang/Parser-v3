@@ -299,9 +299,12 @@ class GraphOutputs(object):
     batch_size = semrel_probs[0].shape[0]
     sparse_semgraph_preds = [[[] for _ in range(seq_len)] 
                                   for _ in range(batch_size)]
+    max_layer = self.num_used_layers if self.num_used_layers > 0 else len(semhead_probs)
+    print ("Using the base {} layers for predicting.".format(max_layer))
     # collect heads from each layer and each attention head
     # for each attention layer
     for n_layer, (head_probs, rel_probs) in enumerate(zip(semhead_probs,semrel_probs)):
+      if n_layer >= max_layer: break
       # (n x m x m x c) -> (n x m x m)
       semrel_preds = np.argmax(rel_probs, axis=-1)[:,1:,:]
       #print ('semrel_preds:\n',semrel_preds)
@@ -857,6 +860,9 @@ class GraphOutputs(object):
   @property
   def losses_by_layer(self):
     return self._losses_by_layer
+  @property
+  def num_used_layers(self):
+    return self._config.getint(self, 'num_used_layers')
 
 
 #***************************************************************
