@@ -299,8 +299,12 @@ class GraphOutputs(object):
     batch_size = semrel_probs[0].shape[0]
     sparse_semgraph_preds = [[[] for _ in range(seq_len)] 
                                   for _ in range(batch_size)]
+    if self.stop_by_null_token:
+      stop_id_list = [set() for _ in range(batch_size)]
+      n_head_generated_after_stop = 0
     max_layer = self.num_used_layers if self.num_used_layers > 0 else len(semhead_probs)
     print ("Using the base {} layers for predicting.".format(max_layer))
+    print ("Stop by NULL token: {} .".format(self.stop_by_null_token))
     # collect heads from each layer and each attention head
     # for each attention layer
     for n_layer, (head_probs, rel_probs) in enumerate(zip(semhead_probs,semrel_probs)):
@@ -316,8 +320,12 @@ class GraphOutputs(object):
         #print (head_indices)
         # the i-th sentence in the batch
         for i, heads in enumerate(head_indices):
+          # the j-th token in the sentence
           for j, head in enumerate(heads):
             if head > 0:
+              if self.stop_by_null_token and j in stop_id_list[i]:
+                n_head_generated_after_stop += 1
+                continue
               head_exists = False
               # do not add duplicate arc
               for h_, s in sparse_semgraph_preds[i][j]:
@@ -327,7 +335,11 @@ class GraphOutputs(object):
               if not head_exists:
                 # substract the index of null token, so null token == -1
                 sparse_semgraph_preds[i][j].append((head-1,semrel_preds[i,j,head]))
+            else:
+              stop_id_list[i].add(j)
+        #print ('stop list:',stop_id_list)
     #print (sparse_semgraph_preds)
+    print ("Number of heads generated after stop: {}".format(n_head_generated_after_stop))
     return sparse_semgraph_preds
 
   def easyfirst_decoder(self, semhead_probs, semrel_probs, lengths, policy='confidence'):
@@ -863,6 +875,9 @@ class GraphOutputs(object):
   @property
   def num_used_layers(self):
     return self._config.getint(self, 'num_used_layers')
+  @property
+  def stop_by_null_token(self):
+    return self._config.getboolean(self, 'stop_by_null_token')
 
 
 #***************************************************************
