@@ -349,9 +349,16 @@ class GraphOutputs(object):
     # (n x m x m x c) -> (n x m x m)
     semrel_preds = np.argmax(semrel_probs, axis=-1)[:,1:,:]
     # remove the null token
+    batch_size = semhead_probs[0][0].shape[0]
     seq_len = semrel_preds.shape[-1] - 1
     sparse_semgraph_preds = [[[] for _ in range(seq_len)] 
                                   for _ in range(semrel_preds.shape[0])]
+    if self.stop_by_null_token:
+      stop_id_list = [set() for _ in range(batch_size)]
+      n_head_generated_after_stop = 0
+    max_layer = self.num_used_layers if self.num_used_layers > 0 else len(semhead_probs)
+    print ("Using the base {} layers for predicting.".format(max_layer))
+    print ("Stop by NULL token: {} .".format(self.stop_by_null_token))
     # collect heads from each layer and each attention head
     # for each attention layer
     for n_layer, headprobs in enumerate(semhead_probs):
@@ -387,6 +394,9 @@ class GraphOutputs(object):
           for i, heads in enumerate(head_indices):
             for j, head in enumerate(heads):
               if head > 0:
+                if self.stop_by_null_token and j in stop_id_list[i]:
+                  n_head_generated_after_stop += 1
+                  continue
                 head_exists = False
                 # do not add duplicate arc
                 for h_, s in sparse_semgraph_preds[i][j]:
@@ -396,6 +406,10 @@ class GraphOutputs(object):
                 if not head_exists:
                   # substract the index of null token, so null token == -1
                   sparse_semgraph_preds[i][j].append((head-1,semrel_preds[i,j,head]))
+              else:
+                stop_id_list[i].add(j)
+          #print ('stop list:',stop_id_list)
+    print ("Number of heads generated after stop: {}".format(n_head_generated_after_stop))
     #print (sparse_semgraph_preds)
     return sparse_semgraph_preds
 
