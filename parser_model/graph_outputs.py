@@ -179,7 +179,7 @@ class GraphOutputs(object):
   
   #=============================================================
   def probs_to_preds(self, probabilities, lengths, augment_layers=None, policy='confidence',
-                      do_encode_rel=False):
+                      predict_rel_in_attention=False):
     """"""
 
     predictions = {}
@@ -259,7 +259,7 @@ class GraphOutputs(object):
         semgraph_preds = self.sem16decoder(semgraph_probs, lengths)
       elif self._factored_semgraph and self.decoder == 'easy-first':
         assert 'semhead' in probabilities
-        if do_encode_rel:
+        if predict_rel_in_attention:
           assert 'semrel' in probabilities
           predictions['semrel'] = self.easyfirst_rel_decoder(probabilities['semhead'], probabilities['semrel'], lengths)
         else:

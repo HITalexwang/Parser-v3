@@ -154,6 +154,7 @@ class EasyFirstNetwork(BaseNetwork):
                                                       arc_hidden_size=self.arc_hidden_size,
                                                       arc_hidden_add_linear=self.arc_hidden_add_linear,
                                                       arc_hidden_keep_prob=self.arc_hidden_keep_prob,
+                                                      predict_rel_in_attention=self.predict_rel_in_attention,
                                                       do_encode_rel=self.do_encode_rel,
                                                       encode_gold_rel_while_training=self.encode_gold_rel_while_training,
                                                       mask_rel_loss_with_global_graph=self.mask_rel_loss_with_global_graph,
@@ -223,7 +224,7 @@ class EasyFirstNetwork(BaseNetwork):
     unlabeled_outputs['predictions'] = acc_outputs['predictions']
     """
     outputs = {}
-    if self.do_encode_rel:
+    if self.predict_rel_in_attention:
       outputs['semgraph'] = transformer_outputs
     else:
       with tf.variable_scope('Classifiers'):
@@ -716,7 +717,7 @@ class EasyFirstNetwork(BaseNetwork):
         probabilities = sess.run(probability_tensors, feed_dict=feed_dict)
         predictions = graph_outputs.probs_to_preds(probabilities, lengths, augment_layers=augment_layers,
                                                     policy=self.sample_policy,
-                                                    do_encode_rel=self.do_encode_rel)
+                                                    predict_rel_in_attention=self.predict_rel_in_attention)
         tokens.update({vocab.field: vocab[predictions[vocab.field]] for vocab in self.output_vocabs})
         graph_outputs.cache_predictions(tokens, indices)
 
@@ -814,6 +815,9 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def arc_hidden_keep_prob(self):
     return self._config.getfloat(self, 'arc_hidden_keep_prob')
+  @property
+  def predict_rel_in_attention(self):
+    return self._config.getboolean(self, 'predict_rel_in_attention')
   @property
   def do_encode_rel(self):
     return self._config.getboolean(self, 'do_encode_rel')

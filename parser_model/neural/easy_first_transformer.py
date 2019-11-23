@@ -51,7 +51,8 @@ class EasyFirstTransformerConfig(object):
                arc_hidden_size=512,
                arc_hidden_add_linear=True,
                arc_hidden_keep_prob=0.67,
-               do_encode_rel = True,
+               predict_rel_in_attention=True,
+               do_encode_rel=True,
                encode_gold_rel_while_training=False,
                mask_rel_loss_with_global_graph=True,
                rel_hidden_size=512,
@@ -110,6 +111,7 @@ class EasyFirstTransformerConfig(object):
     self.arc_hidden_size = arc_hidden_size
     self.arc_hidden_add_linear = arc_hidden_add_linear
     self.arc_hidden_keep_prob = arc_hidden_keep_prob
+    self.predict_rel_in_attention = predict_rel_in_attention
     self.do_encode_rel = do_encode_rel
     self.encode_gold_rel_while_training = encode_gold_rel_while_training
     self.mask_rel_loss_with_global_graph = mask_rel_loss_with_global_graph
@@ -129,7 +131,7 @@ class EasyFirstTransformerConfig(object):
             supervision, sample_policy, share_attention_params))
     print ("mask out fully generated sentences:{}\nuse probability for supervision matrix while predicting:{}".format(
             maskout_fully_generated_sents, use_prob_for_sup))
-    print ("encode label prediction in transformer:{}".format(do_encode_rel))
+    print ("encode label prediction in transformer:{}".format(predict_rel_in_attention))
 
     assert supervision in ['easy-first', 'mask-bi', 'mask-uni', 'none', 'graph-bi', 'graph-uni']
 
@@ -207,7 +209,7 @@ class EasyFirstTransformer(object):
     """
     config = copy.deepcopy(config)
     config.is_training = is_training
-    self.do_encode_rel = config.do_encode_rel
+    self.predict_rel_in_attention = config.predict_rel_in_attention
     if not is_training:
       config.hidden_dropout_prob = 0.0
       config.attention_probs_dropout_prob = 0.0
@@ -355,11 +357,11 @@ class EasyFirstTransformer(object):
     outputs['n_unlabeled_false_negatives'] = n_false_negatives
     outputs['n_correct_unlabeled_sequences'] = n_correct_sequences
 
-    if not self.do_encode_rel:
+    if not self.predict_rel_in_attention:
       outputs['probabilities'] = tf.ones_like(outputs['unlabeled_probabilities'][0][0])
       outputs['loss'] = outputs['unlabeled_loss']
 
-    if self.do_encode_rel:
+    if self.predict_rel_in_attention:
       label_targets = outputs['label_targets']
       unlabeled_predictions = outputs['unlabeled_predictions']
       unlabeled_targets = outputs['unlabeled_targets']
@@ -919,7 +921,7 @@ def attention_layer(from_tensor,
     #outputs['acc_loss'] = tf.add_n(losses)
     #outputs['predictions'] = predictions
     #outputs['probabilities'] = probabilities
-    if config.do_encode_rel:
+    if config.predict_rel_in_attention:
       outputs['label_loss'] = losses['rel']
       outputs['label_predictions'] = predictions['rel']
       outputs['label_probabilities'] = probabilities['rel']
@@ -1210,7 +1212,7 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
     used_heads_ = used_heads * attention_mask
 
   # Compute the label
-  if config.do_encode_rel:
+  if config.predict_rel_in_attention:
     rel_hidden_size = config.rel_hidden_size
     rel_hidden_keep_prob = config.rel_hidden_keep_prob
     with tf.variable_scope("Labeled"):
@@ -1256,34 +1258,35 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
         # Compute the predictions
         # [B, F, T, R] -> [B, F, T]
         rel_predictions = tf.argmax(transposed_logits, axis=-1, output_type=tf.int32)
-      # this is defined in basevocab
-      null_label_index = 3
-      # [B, F, T]
-      null_label_indices = tf.ones_like(rel_predictions) * null_label_index
+      if config.do_encode_rel:
+        # this is defined in basevocab
+        null_label_index = 3
+        # [B, F, T]
+        null_label_indices = tf.ones_like(rel_predictions) * null_label_index
 
-      if config.is_training and config.encode_gold_rel_while_training:
-      #if False:
-        label_indices = tf.where(tf.equal(label_targets,0), null_label_indices, label_targets) * (attention_mask + null_mask_3D)
-        # [B, F, T] -> [B, F, T, R]
-        rel_pred_onehot1 = tf.one_hot(label_indices, config.rel_num, on_value=1.0, off_value=0.0, axis=-1)
-        # [B, F, T, R] * [B, F, T, 1] -> [B, F, T, R]
-        rel_pred_onehot2 = rel_pred_onehot1 * tf.to_float(tf.expand_dims(used_heads,axis=-1))
-      else:
-        label_indices = tf.where(tf.equal(rel_predictions,0), null_label_indices, rel_predictions) * (attention_mask + null_mask_3D)
-        # [B, F, T] -> [B, F, T, R]
-        rel_pred_onehot1 = tf.one_hot(label_indices, config.rel_num, on_value=1.0, off_value=0.0, axis=-1)
-        # [B, F, T, R] * [B, F, T, 1] -> [B, F, T, R]
-        rel_pred_onehot2 = rel_pred_onehot1 * tf.to_float(tf.expand_dims(unlabeled_predictions,axis=-1))
-      # same as in classifiers.bilinear_classifier2
-      rel_pred_size = rel_hidden_size + config.rel_hidden_add_linear
-      # [B*F, R*h] -> [B*F, R, h]
-      rel_layer = tf.reshape(rel_layer, tf.stack([-1,config.rel_num,rel_pred_size]))
-      # [B, F, T, R] -> [B*F, T, R]
-      rel_pred_onehot = tf.reshape(rel_pred_onehot2, tf.stack([-1,to_seq_length,config.rel_num]))
-      # [B*F, T, R] * [B*F, R, h] -> [B*F, T, h]
-      rel_layer = tf.matmul(rel_pred_onehot, rel_layer)
-      # [B*F, T, h] -> [B*F, h]
-      rel_layer = tf.reduce_sum(rel_layer, axis=-2)
+        if config.is_training and config.encode_gold_rel_while_training:
+        #if False:
+          label_indices = tf.where(tf.equal(label_targets,0), null_label_indices, label_targets) * (attention_mask + null_mask_3D)
+          # [B, F, T] -> [B, F, T, R]
+          rel_pred_onehot1 = tf.one_hot(label_indices, config.rel_num, on_value=1.0, off_value=0.0, axis=-1)
+          # [B, F, T, R] * [B, F, T, 1] -> [B, F, T, R]
+          rel_pred_onehot2 = rel_pred_onehot1 * tf.to_float(tf.expand_dims(used_heads,axis=-1))
+        else:
+          label_indices = tf.where(tf.equal(rel_predictions,0), null_label_indices, rel_predictions) * (attention_mask + null_mask_3D)
+          # [B, F, T] -> [B, F, T, R]
+          rel_pred_onehot1 = tf.one_hot(label_indices, config.rel_num, on_value=1.0, off_value=0.0, axis=-1)
+          # [B, F, T, R] * [B, F, T, 1] -> [B, F, T, R]
+          rel_pred_onehot2 = rel_pred_onehot1 * tf.to_float(tf.expand_dims(unlabeled_predictions,axis=-1))
+        # same as in classifiers.bilinear_classifier2
+        rel_pred_size = rel_hidden_size + config.rel_hidden_add_linear
+        # [B*F, R*h] -> [B*F, R, h]
+        rel_layer = tf.reshape(rel_layer, tf.stack([-1,config.rel_num,rel_pred_size]))
+        # [B, F, T, R] -> [B*F, T, R]
+        rel_pred_onehot = tf.reshape(rel_pred_onehot2, tf.stack([-1,to_seq_length,config.rel_num]))
+        # [B*F, T, R] * [B*F, R, h] -> [B*F, T, h]
+        rel_layer = tf.matmul(rel_pred_onehot, rel_layer)
+        # [B*F, T, h] -> [B*F, h]
+        rel_layer = tf.reduce_sum(rel_layer, axis=-2)
       
   if do_return_2d_tensor:
     # `context_layer` = [B*F, n*h]
@@ -1310,7 +1313,7 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
   preds['arc'] = arc_predictions_
   probs['arc'] = arc_probabilities
   losses['arc'] = arc_losses
-  if config.do_encode_rel:
+  if config.predict_rel_in_attention:
     preds['rel'] = rel_predictions
     probs['rel'] = rel_probabilities
     losses['rel'] = rel_loss
