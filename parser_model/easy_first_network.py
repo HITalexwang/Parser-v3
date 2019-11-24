@@ -168,7 +168,8 @@ class EasyFirstNetwork(BaseNetwork):
                                                       use_prob_for_sup=self.use_prob_for_sup,
                                                       gold_head_keep_prob=self.gold_head_keep_prob,
                                                       remove_masked_gold_head=self.remove_masked_gold_head,
-                                                      add_eye_to_sup_probs=self.add_eye_to_sup_probs)
+                                                      add_eye_to_sup_probs=self.add_eye_to_sup_probs,
+                                                      add_layer_embedding=self.add_layer_embedding)
 
     with tf.variable_scope('Transformer'):
       # shape = [batch_size, seq_len, seq_len]
@@ -861,6 +862,9 @@ class EasyFirstNetwork(BaseNetwork):
   @property
   def add_eye_to_sup_probs(self):
     return self._config.getboolean(self, 'add_eye_to_sup_probs')
+  @property
+  def add_layer_embedding(self):
+    return self._config.getboolean(self, 'add_layer_embedding')
   @property
   def loss_interpolation(self):
     output_fields = {vocab.field: vocab for vocab in self.output_vocabs}

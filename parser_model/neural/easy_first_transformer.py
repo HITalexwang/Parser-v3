@@ -65,7 +65,8 @@ class EasyFirstTransformerConfig(object):
                use_prob_for_sup=False,
                gold_head_keep_prob=1,
                remove_masked_gold_head=False,
-               add_eye_to_sup_probs=False):
+               add_eye_to_sup_probs=False,
+               add_layer_embedding=False):
     """Constructs GraphTransformerConfig.
 
     Args:
@@ -128,6 +129,7 @@ class EasyFirstTransformerConfig(object):
     self.gold_head_keep_prob = gold_head_keep_prob
     self.remove_masked_gold_head = remove_masked_gold_head
     self.add_eye_to_sup_probs = add_eye_to_sup_probs
+    self.add_layer_embedding = add_layer_embedding
 
     print ("supervision type: {}\nsample policy: {}\nshare attention parameters: {}".format(
             supervision, sample_policy, share_attention_params))
@@ -1561,8 +1563,21 @@ def easy_first_transformer_model(input_tensor,
     else:
       scope = "layer_%d" % layer_idx
     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
-    #with tf.variable_scope("layer_%d" % layer_idx):
       layer_input = prev_output
+
+      if config.add_layer_embedding:
+        with tf.variable_scope("layer_embeddings"):
+          layer_embeddings = tf.get_variable(
+              name="layer_embedding-%d"%layer_idx,
+              shape=[input_width],
+              initializer=create_initializer(initializer_range))
+          # broadcast along first (batch_size * seq_len) dimension
+          layer_broadcast_shape = [1,input_width]
+          layer_embeddings = tf.reshape(layer_embeddings,
+                                           layer_broadcast_shape)
+          layer_input += layer_embeddings
+
+          layer_input = layer_norm_and_dropout(layer_input, hidden_dropout_prob)
 
       with tf.variable_scope("attention"):
         attention_heads = []
