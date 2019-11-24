@@ -38,6 +38,7 @@ class EasyFirstTransformerConfig(object):
                intermediate_size=1024,
                hidden_act="gelu",
                hidden_dropout_prob=0.1,
+               layer_input_dropout_prob=0,
                attention_probs_dropout_prob=0.1,
                acc_mask_dropout_prob=0.1,
                max_position_embeddings=512,
@@ -99,6 +100,7 @@ class EasyFirstTransformerConfig(object):
     self.hidden_act = hidden_act
     self.intermediate_size = intermediate_size
     self.hidden_dropout_prob = hidden_dropout_prob
+    self.layer_input_dropout_prob = layer_input_dropout_prob
     self.attention_probs_dropout_prob = attention_probs_dropout_prob
     self.acc_mask_dropout_prob = acc_mask_dropout_prob
     self.max_position_embeddings = max_position_embeddings
@@ -218,6 +220,7 @@ class EasyFirstTransformer(object):
       config.hidden_dropout_prob = 0.0
       config.attention_probs_dropout_prob = 0.0
       config.acc_mask_dropout_prob = 0.0
+      config.layer_input_dropout_prob = 0.0
       config.arc_hidden_keep_prob = 1.0
       config.rel_hidden_keep_prob = 1.0
 
@@ -1577,7 +1580,7 @@ def easy_first_transformer_model(input_tensor,
                                            layer_broadcast_shape)
           layer_input += layer_embeddings
 
-          layer_input = layer_norm_and_dropout(layer_input, hidden_dropout_prob)
+          layer_input = layer_norm_and_dropout(layer_input, config.layer_input_dropout_prob)
 
       with tf.variable_scope("attention"):
         attention_heads = []

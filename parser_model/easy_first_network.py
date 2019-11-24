@@ -764,6 +764,9 @@ class EasyFirstNetwork(BaseNetwork):
   def hidden_dropout_prob(self):
     return self._config.getfloat(self, 'hidden_dropout_prob')
   @property
+  def layer_input_dropout_prob(self):
+    return self._config.getfloat(self, 'layer_input_dropout_prob')
+  @property
   def attention_probs_dropout_prob(self):
     return self._config.getfloat(self, 'attention_probs_dropout_prob')
   @property
