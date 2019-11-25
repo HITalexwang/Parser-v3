@@ -315,10 +315,9 @@ class EasyFirstTransformer(object):
 
     if optimize_by_layer:
       outputs['losses_by_layer'] = outputs['unlabeled_loss']
-
+    n_layers = len(outputs['unlabeled_loss'])
     outputs['unlabeled_loss'] = tf.add_n(outputs['unlabeled_loss'])
-    if not self.predict_rel_in_attention:
-      n_layers = len(outputs['unlabeled_loss'])
+    if not self.predict_rel_in_attention: 
       outputs['unlabeled_loss'] = 1.0/float(n_layers) * outputs['unlabeled_loss']
     # n_layers x [batch_size, seq_len, seq_len]
     predictions = outputs['unlabeled_predictions']

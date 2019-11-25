@@ -362,6 +362,7 @@ class GraphOutputs(object):
     # collect heads from each layer and each attention head
     # for each attention layer
     for n_layer, headprobs in enumerate(semhead_probs):
+      if n_layer >= max_layer: break
       # for each attention head
       for h, probs in enumerate(headprobs):
         if policy == 'top_k':
