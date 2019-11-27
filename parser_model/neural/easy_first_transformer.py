@@ -216,6 +216,7 @@ class EasyFirstTransformer(object):
     config = copy.deepcopy(config)
     config.is_training = is_training
     self.predict_rel_in_attention = config.predict_rel_in_attention
+    self.num_sup_heads = config.num_sup_heads
     if not is_training:
       config.hidden_dropout_prob = 0.0
       config.attention_probs_dropout_prob = 0.0
@@ -318,7 +319,7 @@ class EasyFirstTransformer(object):
     n_layers = len(outputs['unlabeled_loss'])
     outputs['unlabeled_loss'] = tf.add_n(outputs['unlabeled_loss'])
     if not self.predict_rel_in_attention: 
-      outputs['unlabeled_loss'] = 1.0/float(n_layers) * outputs['unlabeled_loss']
+      outputs['unlabeled_loss'] = 1.0/float(n_layers*self.num_sup_heads) * outputs['unlabeled_loss']
     # n_layers x [batch_size, seq_len, seq_len]
     predictions = outputs['unlabeled_predictions']
     # [batch_size, seq_len, seq_len]
