@@ -47,7 +47,7 @@ class EasyFirstTransformerConfig(object):
                smoothing_rate=0,
                rm_prev_tp=False,
                num_sup_heads=1,
-               n_top_heads=4,
+               max_top_heads=4,
                use_biaffine=True,
                arc_hidden_size=512,
                arc_hidden_add_linear=True,
@@ -92,7 +92,7 @@ class EasyFirstTransformerConfig(object):
       smoothing_rate: smoothing rate for the sigmoid cross-entropy
       rm_prev_tp: remove previous true positive predictions from the gold graph ?
       num_sup_heads: number of supervised attention heads
-      n_top_heads: number of chosen heads for each layer
+      max_top_heads: number of chosen heads for each layer
     """
     self.hidden_size = hidden_size
     self.num_hidden_layers = num_hidden_layers
@@ -110,7 +110,7 @@ class EasyFirstTransformerConfig(object):
     self.rm_prev_tp = rm_prev_tp
 
     self.num_sup_heads = num_sup_heads
-    self.n_top_heads = n_top_heads
+    self.max_top_heads = max_top_heads
     self.use_biaffine = use_biaffine
     self.arc_hidden_size = arc_hidden_size
     self.arc_hidden_add_linear = arc_hidden_add_linear
@@ -217,6 +217,7 @@ class EasyFirstTransformer(object):
     config.is_training = is_training
     self.predict_rel_in_attention = config.predict_rel_in_attention
     self.num_sup_heads = config.num_sup_heads
+    self.sample_policy = config.sample_policy
     if not is_training:
       config.hidden_dropout_prob = 0.0
       config.attention_probs_dropout_prob = 0.0
@@ -368,9 +369,25 @@ class EasyFirstTransformer(object):
     outputs['n_unlabeled_false_negatives'] = n_false_negatives
     outputs['n_correct_unlabeled_sequences'] = n_correct_sequences
 
+    if self.sample_policy == 'top_k':
+      outputs['filter_loss'] = tf.add_n(outputs['filter_loss'])
+      outputs['filter_probabilities'] = outputs['filter_probabilities']
+      outputs['filter_predictions'] = outputs['filter_predictions']
+      outputs['filter_targets'] = outputs['filter_targets']
+      matches = []
+      totals = []
+      for targets, preds in zip(outputs['filter_targets'], outputs['filter_predictions']):
+        for target, pred in zip(targets, preds):
+          matches.append(tf.reduce_sum(nn.equal(target,pred)))
+          totals.append(tf.reduce_sum(tf.ones_like(target)))
+      outputs['n_filter_correct'] = tf.add_n(matches)
+      outputs['n_filter_total'] = tf.add_n(totals)
     if not self.predict_rel_in_attention:
       outputs['probabilities'] = tf.ones_like(outputs['unlabeled_probabilities'][0][0])
-      outputs['loss'] = outputs['unlabeled_loss']
+      if self.sample_policy == 'top_k':
+        outputs['loss'] = outputs['filter_loss'] + outputs['unlabeled_loss']
+      else:
+        outputs['loss'] = outputs['unlabeled_loss']
 
     if self.predict_rel_in_attention:
       label_targets = outputs['label_targets']
@@ -798,7 +815,7 @@ def attention_layer(from_tensor,
     supervision: supervision type (i.e. `direct` or `mask`)
     reuse_weight: whether to reuse attention weights across layers
     num_sup_heads: number of supervised attention heads
-    n_top_heads: number of selected head at this layer
+    max_top_heads: number of selected head at this layer
     sup_head_size: size of supervised attention head
 
   Returns:
@@ -907,7 +924,7 @@ def attention_layer(from_tensor,
     # losses: S * []
     # predictions: S * [B, F]
     # graph_context_layer: [B, F, n*h]
-    losses, predictions, probabilities, graph_context_layer, used_heads, allowed_heads = easy_first_one_step(
+    losses, predictions, probabilities, samples, graph_context_layer, allowed_heads = easy_first_one_step(
                                           config, from_tensor_2d,
                                           to_tensor_2d, attention_mask, null_mask, batch_size,
                                           from_seq_length, to_seq_length,
@@ -918,7 +935,7 @@ def attention_layer(from_tensor,
                                           use_biaffine=config.use_biaffine,
                                           arc_hidden_size = config.arc_hidden_size, rel_hidden_size = 512,
                                           num_sup_heads=config.num_sup_heads, 
-                                          n_top_heads=config.n_top_heads,
+                                          max_top_heads=config.max_top_heads,
                                           smoothing_rate=config.smoothing_rate,
                                           initializer_range=initializer_range,
                                           add_linear=config.arc_hidden_add_linear,
@@ -927,11 +944,16 @@ def attention_layer(from_tensor,
     outputs['unlabeled_loss'] = tf.add_n(losses['arc'])
     outputs['unlabeled_predictions'] = predictions['arc']
     outputs['unlabeled_probabilities'] = probabilities['arc']
-    outputs['used_heads'] = used_heads
+    outputs['used_heads'] = samples['arc']
     outputs['allowed_heads'] = allowed_heads
     #outputs['acc_loss'] = tf.add_n(losses)
     #outputs['predictions'] = predictions
     #outputs['probabilities'] = probabilities
+    if config.sample_policy == 'top_k':
+      outputs['filter_loss'] = tf.add_n(losses['filter'])
+      outputs['filter_predictions'] = predictions['filter']
+      outputs['filter_probabilities'] = probabilities['filter']
+      outputs['filter_targets'] = samples['filter']
     if config.predict_rel_in_attention:
       outputs['label_loss'] = losses['rel']
       outputs['label_predictions'] = predictions['rel']
@@ -983,7 +1005,7 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
                       label_targets=None,
                       use_biaffine=False, 
                       arc_hidden_size=512, rel_hidden_size=512,
-                      num_sup_heads=1, n_top_heads=4, policy='random',
+                      num_sup_heads=1, max_top_heads=4, policy='random',
                       smoothing_rate=0.1, initializer_range=0.02,
                       add_linear=True, arc_hidden_keep_prob=0.67,
                       do_return_2d_tensor=True):
@@ -1008,6 +1030,7 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
   #   n = `num_sup_heads`
   #   h = `arc_hidden_size`
 
+  hidden_size = get_shape_list(from_tensor_2d)[-1]
   # Compute the arc
   # query_layer = [B*F, n*h], works as representation of dependent token
   query_layer = classifiers.dense_layer(from_tensor_2d, num_sup_heads * arc_hidden_size, 
@@ -1066,6 +1089,10 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
   #  allowed_heads = tf.expand_dims(null_mask, axis=1) + remained_unlabeled_targets
   #else:
   allowed_heads = remained_unlabeled_targets
+  filter_losses = []
+  filter_probabilities = []
+  filter_predictions = []
+  filter_targets = []
   arc_losses = []
   arc_predictions = []
   supervised_probs = []
@@ -1077,9 +1104,50 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
     supervised_logits = attention_scores[:,i,:,:]
     #probability = tf.nn.softmax(supervised_logits) * tf.to_float(mask_with_null)
     if policy == 'top_k':
-      # [B, F, T], 1 for selected head, 0 otherwise
-      selected_gold_heads_3D = top_k_heads(supervised_logits, allowed_heads, null_mask, n=n_top_heads)
-      probability = tf.nn.sigmoid(supervised_logits) * tf.to_float(mask_with_null)
+      # compute filter to decide how many arcs to keep
+      # [H, 1]
+      filter_embedding = tf.get_variable(name="filter_embedding", shape=[hidden_size, 1],
+                                  initializer=create_initializer(initializer_range))
+      # [B, F, H]
+      from_tensor = tf.reshape(from_tensor_2d, [batch_size, from_seq_length, hidden_size])
+      # [B*F, H] * [H, 1] -> [B*F, 1] -> [B, 1, F]
+      filter_weight = tf.reshape(tf.matmul(from_tensor_2d, filter_embedding), [batch_size,1, from_seq_length])
+      # [B, 1, F] * [B, F, H] -> [B, 1, H] -> [B, H]
+      filter_attention = tf.reshape(tf.matmul(filter_weight, from_tensor), [batch_size, hidden_size])
+      # map to {0, 1, 2, ..., k, EOS} 
+      # to predict the number of selected heads at this layer
+      # [B, max_top_heads+2]
+      filter_logits = tf.layers.dense(filter_attention, max_top_heads+2, name="filter",
+                                  kernel_initializer=create_initializer(initializer_range))
+      # [B, max_top_heads+2]
+      filter_probs = tf.nn.softmax(filter_logits)
+      filter_probabilities.append(filter_probs)
+      # [B], this is the predicted number of selected arcs at this layer
+      # if is equals to max_top_heads+1, it means EOS, all arcs are predicted
+      k_pred = tf.cast(tf.argmax(filter_logits, -1), dtype=tf.int32)
+      filter_predictions.append(k_pred)
+
+      k_gold = sample_k(max_top_heads, allowed_heads, policy='random', logits=None)
+      filter_targets.append(k_gold)
+
+      # [B], [B, max_top_heads+2] -> ()
+      k_loss = tf.losses.sparse_softmax_cross_entropy(k_gold, filter_logits)
+      filter_losses.append(k_loss)
+
+      # [B, F, T]
+      # sample the top k gold selected heads
+      disallowed_adder = (1.0 - tf.cast(allowed_heads, tf.float32)) * -1e9
+      # [B, F, T], scores for allowed dep heads
+      scores = supervised_logits + disallowed_adder
+
+      # [B, F, T], top k gold heads
+      selected_gold_heads_3D = top_k_heads(scores, max_k=max_top_heads, k_batch=k_gold) * allowed_heads
+
+      masked_adder = (1.0 - tf.cast(mask_with_null, tf.float32)) * -1e9
+      # [B, F, T], top k pred heads
+      predicted_heads_3D = top_k_heads(supervised_logits + masked_adder, max_k=max_top_heads, k_batch=k_pred)
+      # [B, F, T], should select top k scores from this layer
+      probability = supervised_logits + (1.0 - tf.cast(attention_mask, tf.float32)) * -1e9
     elif policy == 'random':
       selected_gold_heads = random_sample(allowed_heads, null_mask, from_seq_length)
       probability = tf.nn.softmax(supervised_logits) * tf.to_float(mask_with_null)
@@ -1100,47 +1168,44 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
       new_attention_mask = sliced_attention_mask
     
     if policy == 'top_k':
-      add_null_for_words_with_no_head = False
       # [B, F, T]
       zeros = tf.zeros_like(attention_mask)
-      if add_null_for_words_with_no_head:
-        # [B, F, 1], the number of selected heads for each word
-        selected_heads_cnt = tf.reduce_sum(selected_gold_heads_3D, axis=-1, keep_dims=True)
-        # [B, F, T]
-        selected_heads_cnt_3D = selected_heads_cnt + zeros
-        # [B, F, T]
-        selected_gold_heads_3D_ = tf.where(tf.equal(selected_heads_cnt_3D,0), null_mask_3D, selected_gold_heads_3D)
-      else:
-        selected_gold_heads_3D_ = selected_gold_heads_3D
-      used_heads.append(selected_gold_heads_3D_)
+      used_heads.append(selected_gold_heads_3D)
       # update allowed_heads to make sure other attention head do not select these depheads
-      allowed_heads = allowed_heads - selected_gold_heads_3D_ * attention_mask
+      allowed_heads = allowed_heads - selected_gold_heads_3D * attention_mask
 
       if use_null_mask:
         attention_mask_3D = attention_mask + null_mask_3D
       else:
         attention_mask_3D = attention_mask
-      loss = tf.losses.sigmoid_cross_entropy(selected_gold_heads_3D_, supervised_logits,
-                                              weights=attention_mask_3D,
-                                              label_smoothing=smoothing_rate)
+      # [B, F*T]
+      reshaped_logits = tf.reshape(supervised_logits, [batch_size, -1])
+      # [B, F, T]
+      head_logp = tf.reshape(tf.nn.log_softmax(reshaped_logits, -1), tf.shape(supervised_logits))
+      neg_inf_like_logp = tf.fill(tf.shape(head_logp), -1e9)
+      selected_gold_heads_logp = tf.where(tf.equal(selected_gold_heads_3D,1), head_logp, neg_inf_like_logp)
+      # [B]
+      logp_selected_gold_heads = tf.reduce_logsumexp(selected_gold_heads_logp, axis=(1, 2))
+      loss = -tf.reduce_mean(logp_selected_gold_heads)
+
       arc_losses.append(loss)
       # [B, F, T] -> [B, F, T]
-      prediction = nn.greater(supervised_logits, 0, dtype=tf.int32) * attention_mask
+      #prediction = nn.greater(supervised_logits, 0, dtype=tf.int32) * attention_mask
+      prediction = predicted_heads_3D * attention_mask
       arc_predictions.append(prediction)
 
       #print ('Is training:',config.is_training)
       if config.is_training:
         # [B, F, T]
-        smoothed_head_tensor = tf.to_float(selected_gold_heads_3D_) * (1 - smoothing_rate) + 0.5 * smoothing_rate
+        smoothed_head_tensor = tf.to_float(selected_gold_heads_3D) * (1 - smoothing_rate) + 0.5 * smoothing_rate
         supervised_probs.append(smoothed_head_tensor)
       else:
         if config.use_prob_for_sup:
           # probability: [B, F, T]
           supervised_probs.append(probability)
         else:
-          smoothed_head_tensor = prediction
+          smoothed_head_tensor = tf.cast(prediction, supervised_logits.dtype)
           if smoothing_rate > 0:
-            smoothed_head_tensor = tf.cast(smoothed_head_tensor, supervised_logits.dtype)
             smoothed_head_tensor = (smoothed_head_tensor * (1 - smoothing_rate) + 0.5 * smoothing_rate)
           supervised_probs.append(smoothed_head_tensor)
     # for random & confidence
@@ -1326,15 +1391,22 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
   preds = {}
   probs = {}
   losses = {}
+  samples = {}
   preds['arc'] = arc_predictions_
   probs['arc'] = arc_probabilities
   losses['arc'] = arc_losses
+  samples['arc'] = used_heads_
+  if policy == 'top_k':
+    preds['filter'] = filter_predictions
+    probs['filter'] = filter_probabilities
+    losses['filter'] = filter_losses
+    samples['filter'] = filter_targets
   if config.predict_rel_in_attention:
     preds['rel'] = rel_predictions
     probs['rel'] = rel_probabilities
     losses['rel'] = rel_loss
 
-  return losses, preds, probs, graph_context_layer, used_heads_, allowed_heads
+  return losses, preds, probs, samples, graph_context_layer, allowed_heads
 
 def gather_subgraphs(head_index_list):
   """
@@ -1352,6 +1424,29 @@ def gather_subgraphs(head_index_list):
   # [B, F, T]
   gathered_graph = nn.greater(tf.add_n(matrices), 0)
   return gathered_graph
+
+def sample_k(max_top_heads, allowed_heads, policy='random', logits=None):
+  """
+  Ramdonly sample one head for each word from the allowed_heads
+  Input:
+    max_top_heads: int, max number of predicted arcs at each layer
+    allowed_heads: [B, F, T], entry is 1 if the head is allowed, elseweise 0
+  Return:
+    k: [B], each entry is the sampled number of heads for a sentence
+  """
+  batch_size = get_shape_list(allowed_heads)[0]
+  # sample k, [B]
+  k = tf.random_uniform(shape=[batch_size], minval=0, maxval=max_top_heads, dtype=tf.int32)
+  # [B, F, T] -> [B], number of remained arcs of each sentence
+  n_allowed_heads = tf.reduce_sum(allowed_heads, axis=[1,2])
+  # [B], make sure not predict more than allowed arcs
+  k = tf.where(tf.less(n_allowed_heads, k), n_allowed_heads, k)
+  # [B], the index vector of EOS token
+  eos_vec = tf.ones_like(n_allowed_heads) * (max_top_heads+1)
+  # [B], let the filter predict EOS when all arcs are generated
+  k = tf.where(tf.equal(n_allowed_heads, 0), eos_vec, k)
+
+  return k
 
 def confidence_sample(supervised_logits, allowed_heads, null_mask, seq_len):
   """
@@ -1416,61 +1511,54 @@ def random_sample(allowed_heads, null_mask, seq_len):
 
   return selected_gold_heads
 
-def top_k_heads(supervised_logits, allowed_heads, null_mask, n=4):
+def top_k_heads(logits, max_k=4, k_batch=None):
   """
   Input:
-    scores: [B, F, T], the score matrix
-    k: the number of top heads to return
-    null_mask: [B, F], entry is 1 if is the null token, elsewise 0
+    logits: [B, F, T], the score matrix
+    max_k: max number of predicted arcs
+    k: [B], the number of top heads to return
   Return:
-    #selected_gold_heads: [B, F], each entry is the index of the chosen word
-    selected_gold_heads_3D: [B, F, T], 1 represent the chosen head, 0 otherwise
+    heads_3D: [B, F, T], 1 represent the chosen head, 0 otherwise
   """
-  disallowed_adder = (1.0 - tf.cast(allowed_heads, tf.float32)) * -10000.0
-  # [B, F, T], scores for allowed dep heads (including NULL)
-  scores = supervised_logits + disallowed_adder
-
-  batch_size, from_seq_len, to_seq_len = get_shape_list(scores)
-  # [B, F, T] -> [B, F*T] (reshape) -> [B, k]
-  _, top_indices = tf.nn.top_k(tf.reshape(scores, (batch_size,-1)), n)
-  # [B, k, 2], the cordinates of top k arcs
+  batch_size, from_seq_len, to_seq_len = get_shape_list(logits)
+  # [B, F, T] -> [B, F*T] (reshape) -> [B, max_k]
+  _, top_indices = tf.nn.top_k(tf.reshape(logits, (batch_size,-1)), max_k)
+  # [B, max_k, 2], the cordinates of top k arcs
   top_indices = tf.stack(((top_indices // to_seq_len), (top_indices % to_seq_len)), -1)
-  # [B, k, 2] -> [B, T(=F), T], 1 represent the chosen head, 0 otherwise
-  selected_gold_heads_3D = indices_to_tensor(top_indices, batch_size, n, to_seq_len, value=1)
+  # [B, max_k, 2] -> [B, T(=F), T], 1 represent the chosen head, 0 otherwise
+  heads_3D = indices_to_tensor(top_indices, batch_size, max_k, k_batch, to_seq_len, value=1)
 
-  zeros = tf.zeros_like(selected_gold_heads_3D)
-  # [B, F, T]
-  null_mask_3D = tf.expand_dims(null_mask, axis=1) + zeros
+  return heads_3D
 
-  # [B, F, 1], the number of selected heads for each word
-  allowed_head_cnt = tf.reduce_sum(allowed_heads, axis=-1, keep_dims=True)
-  # [B, F, T]
-  allowed_head_cnt_3D = allowed_head_cnt + zeros
-  # [B, F, T]
-  #selected_gold_heads_3D = tf.where(tf.equal(allowed_head_cnt_3D,0), null_mask_3D, selected_gold_heads_3D)
-  selected_gold_heads_3D = tf.where(tf.equal(allowed_head_cnt_3D,0), zeros, selected_gold_heads_3D)
-
-  return selected_gold_heads_3D
-
-def indices_to_tensor(indices, batch_size, k, to_seq_len, value=1):
+def indices_to_tensor(indices, batch_size, max_k, k_batch, to_seq_len, value=1):
   """
   Input:
-    indices: [B, k, 2], the cordinates of top k arcs
+    indices: [B, max_k, 2], the cordinates of top k arcs
+    k_batch: [B], the number of top heads to return
   Return:
     tensor: []
   """
   # add batch id to indices
   # [B, 1, 1]
   batch_idx = tf.reshape(tf.range(batch_size), [batch_size, 1, 1])
-  # [B, k, 1]
-  batch_index = tf.tile(batch_idx, [1, k, 1])
-  # [B, k, 1], [B, k, 2] -> [B, k, 3]
+  # [B, max_k, 1]
+  batch_index = tf.tile(batch_idx, [1, max_k, 1])
+  # [B, max_k, 1], [B, max_k, 2] -> [B, max_k, 3]
   batched_indices = tf.concat([batch_index, indices], axis=-1)
-  # [B*k, 3]
+  # [B*max_k, 3]
   reshaped_indices = tf.reshape(batched_indices, [-1, 3])
 
-  # [B*k]
-  values = tf.ones(shape=[batch_size*k], dtype=tf.int32) * value
+  # [B, max_k]
+  k_batch = tf.tile(tf.expand_dims(k_batch, -1), [1, max_k])
+  # [B, max_k]
+  rng = tf.tile(tf.expand_dims(tf.range(max_k), 0), [batch_size, 1])
+  one = tf.ones_like(rng)
+  zero = tf.zeros_like(rng)
+  # [B, max_k], first k_batch are 1, following are 0
+  values = tf.where(tf.less(rng, k_batch), one, zero) * value
+  # [B*max_k]
+  values = tf.reshape(values, [-1])
+
   shape = [batch_size, to_seq_len, to_seq_len]
   # [B, T, T]
   tensor = tf.scatter_nd(reshaped_indices, values, shape)
@@ -1557,6 +1645,8 @@ def easy_first_transformer_model(input_tensor,
   all_layer_outputs = []
   outputs = {'unlabeled_loss':[], 'unlabeled_probabilities':[], 'unlabeled_predictions':[], 
             'label_loss':[], 'label_predictions':[], 'label_probabilities':[],
+            'filter_loss':[], 'filter_predictions':[], 'filter_probabilities':[],
+            'filter_targets':[],
             'unlabeled_targets':unlabeled_targets, 'label_targets':label_targets,
             'used_heads':[], 'allowed_heads':[]}
 

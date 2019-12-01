@@ -149,7 +149,7 @@ class EasyFirstNetwork(BaseNetwork):
                                                       smoothing_rate=self.smoothing_rate,
                                                       rm_prev_tp=self.rm_prev_tp,
                                                       num_sup_heads=self.n_supervised_attention_heads,
-                                                      n_top_heads=self.n_top_selected_depheads,
+                                                      max_top_heads=self.max_top_selected_depheads,
                                                       use_biaffine=self.use_biaffine,
                                                       arc_hidden_size=self.arc_hidden_size,
                                                       arc_hidden_add_linear=self.arc_hidden_add_linear,
@@ -610,7 +610,7 @@ class EasyFirstNetwork(BaseNetwork):
                   dev_outputs.restart_timer()
                   feed_dict = devset.set_placeholders(batch)
                   dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
-                  dev_outputs.update_history(dev_scores, show=False)
+                  dev_outputs.update_history(dev_scores, show=True)
                 current_accuracy *= .5
                 current_accuracy += .5*dev_outputs.get_current_accuracy()
                 if current_accuracy >= best_accuracy:
@@ -803,8 +803,8 @@ class EasyFirstNetwork(BaseNetwork):
   def n_supervised_attention_heads(self):
     return self._config.getint(self, 'n_supervised_attention_heads')
   @property
-  def n_top_selected_depheads(self):
-    return self._config.getint(self, 'n_top_selected_depheads')
+  def max_top_selected_depheads(self):
+    return self._config.getint(self, 'max_top_selected_depheads')
   @property
   def optimize_by_layer(self):
     return self._config.getboolean(self, 'optimize_by_layer')
