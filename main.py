@@ -143,13 +143,17 @@ def train(**kwargs):
   
   # If the save_dir wasn't overwritten, load its config_file
   if os.path.isdir(save_dir):
-    config_file = os.path.join(save_dir, 'config.cfg')
+    #config_file = os.path.join(save_dir, 'config.cfg')
+    default_config_file = os.path.join(save_dir, 'config.cfg')
   else:
     os.makedirs(save_dir)
     os.system('git rev-parse HEAD >> {}'.format(os.path.join(save_dir, 'HEAD')))
   
   kwargs['DEFAULT']['save_dir'] = save_dir
-  config = Config(config_file=config_file, **kwargs)
+  if load:
+    config = Config(defaults_file=default_config_file, config_file=config_file, **kwargs)
+  else:
+    config = Config(config_file=config_file, **kwargs)
   network_list = config.get(network_class, 'input_network_classes')
   if not load:
     with open(os.path.join(save_dir, 'config.cfg'), 'w') as f:

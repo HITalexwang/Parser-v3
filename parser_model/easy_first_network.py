@@ -303,6 +303,13 @@ class EasyFirstNetwork(BaseNetwork):
                                    factored_deptree=factored_deptree, factored_semgraph=factored_semgraph, 
                                    config=self._config, loss_interpolation=self.loss_interpolation)
 
+    if load:
+      # collect variables
+      all_variables = set(tf.global_variables())
+      non_save_variables = set(tf.get_collection('non_save_variables'))
+      save_variables = all_variables - non_save_variables
+      saver = tf.train.Saver(list(save_variables), max_to_keep=1)
+
     with tf.variable_scope(self.classname, reuse=True):
       dev_graph = self.build_graph(input_network_outputs=input_network_outputs, reuse=True)
       dev_outputs = DevOutputs(*dev_graph, load=load, evals=self._evals, \
@@ -542,6 +549,10 @@ class EasyFirstNetwork(BaseNetwork):
           feed_dict[self.pretrained_vocabs[0].embed_placeholder] = self.pretrained_vocabs[0].embeddings
         sess.run(tf.global_variables_initializer(), feed_dict=feed_dict)
 
+        if load:
+          with Timer('Restoring save variables'):
+            saver.restore(sess, tf.train.latest_checkpoint(self.save_dir))
+
         for vocab in self.input_vocabs:
           if 'BERT' in vocab.classname:
             with Timer('Restoring BERT pretrained ckpt'):
@@ -612,7 +623,7 @@ class EasyFirstNetwork(BaseNetwork):
                   dev_outputs.restart_timer()
                   feed_dict = devset.set_placeholders(batch)
                   dev_scores = sess.run(dev_tensors, feed_dict=feed_dict)
-                  dev_outputs.update_history(dev_scores, show=True)
+                  dev_outputs.update_history(dev_scores, show=False)
                 current_accuracy *= .5
                 current_accuracy += .5*dev_outputs.get_current_accuracy()
                 if current_accuracy >= best_accuracy:
