@@ -312,6 +312,13 @@ class GraphIndexVocab(IndexVocab):
                       name=self.classname+'acc-'+str(i)) for i in range(self.max_accessible_depth)]
     else:
       self.accessible_placeholders = None
+    if self.n_graph_layers > 0 and self.max_top_selected_depheads > 0:
+      # each layer has a k target vector of batch_size
+      self.k_placeholders = [tf.placeholder(tf.int32, [None], name='k_targets-'+str(i)) for 
+                            i in range(self.n_graph_layers)]
+    else:
+      self.k_placeholders = None
+
     return
 
   #=============================================================
@@ -328,9 +335,42 @@ class GraphIndexVocab(IndexVocab):
       #print (feed_dict[self.placeholder])
       #print (feed_dict[self.accessible_placeholders[0]])
     else:
+      # [batch_size, seq_len, seq_len]
       feed_dict[self.placeholder] = indices
+    if self.k_placeholders is not None:
+      graph = feed_dict[self.placeholder]
+      # [batch_size]
+      n_heads = np.sum(np.sum(graph, axis=-1), axis=-1)
+      k_batch = self.sample_k(n_heads)
+      for i in range(len(self.k_placeholders)):
+        feed_dict[self.k_placeholders[i]] = k_batch[i]
+      #print (graph)
+      #print (n_heads)
+      #print (k_batch)
     return feed_dict
-  
+
+  def sample_k(self, n_heads):
+
+    eos = self.max_top_selected_depheads + 1
+    sample = np.zeros([self.n_graph_layers, len(n_heads)])
+    for i, n_head in enumerate(n_heads):
+      if n_head > (self.n_graph_layers-1)*self.max_top_selected_depheads:
+        print ("number of heads out of range: {}".format(n_head))
+        break
+      cnt = 0
+      while cnt < n_head:
+        l = np.random.randint(0, self.n_graph_layers-1)
+        if sample[l,i] < self.max_top_selected_depheads:
+          sample[l,i] += 1
+          cnt += 1
+      l_ = self.n_graph_layers-1
+      while sample[l_,i] == 0:
+        sample[l_,i] = eos
+        l_ -= 1
+    # last layer is eos
+    # [n_layers, batch_size]
+    return sample
+
   #=============================================================
   def get_bilinear_discriminator(self, layer, token_weights, variable_scope=None, reuse=False):
     """"""
@@ -556,7 +596,12 @@ class GraphIndexVocab(IndexVocab):
   @property
   def insert_null_token(self):
     return self._config.getboolean(self, 'insert_null_token')
-
+  @property
+  def n_graph_layers(self):
+    return self._config.getint(self, 'n_graph_layers')
+  @property
+  def max_top_selected_depheads(self):
+    return self._config.getint(self, 'max_top_selected_depheads')
 
 #***************************************************************
 class IDIndexVocab(IndexVocab, cv.IDVocab):

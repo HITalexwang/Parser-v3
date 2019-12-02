@@ -652,11 +652,11 @@ class GraphOutputs(object):
       print ('used heads(y):\n',outputs['semgraph']['used_heads'])
       print ('unlabeled by layer:\n',outputs['semgraph']['unlabeled_by_layer'])
       print ('sumed unlabeled:\n',outputs['semgraph']['unlabeled_predictions'])
-      if 'n_filter_correct' in outputs['semgraph']:
-        print ('filter_targets:',outputs['semgraph']['filter_targets'])
+      if 'filter_predictions' in outputs['semgraph']:
+        #print ('filter_targets:',outputs['semgraph']['filter_targets'])
         print ('filter_predictions:',outputs['semgraph']['filter_predictions'])
-        print ('n_filter_correct:',outputs['semgraph']['n_filter_correct'])
-        print ('n_filter_total:',outputs['semgraph']['n_filter_total'])
+        #print ('n_filter_correct:',outputs['semgraph']['n_filter_correct'])
+        #print ('n_filter_total:',outputs['semgraph']['n_filter_total'])
       if 'label_by_layer' in outputs['semgraph']:
         print ('label by layer:\n',outputs['semgraph']['label_by_layer'])
         print ('sumed label:\n',outputs['semgraph']['label_predictions'])

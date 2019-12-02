@@ -198,6 +198,7 @@ class EasyFirstTransformer(object):
                unlabeled_targets=None,
                label_targets=None,
                null_mask=None,
+               k_targets=None,
                scope=None):
     """Constructor for GraphTransformer.
 
@@ -280,6 +281,7 @@ class EasyFirstTransformer(object):
             null_mask=null_mask,
             unlabeled_targets=unlabeled_targets,
             label_targets=label_targets,
+            k_targets=k_targets,
             hidden_size=config.hidden_size,
             num_hidden_layers=config.num_hidden_layers,
             num_attention_heads=config.num_attention_heads,
@@ -380,12 +382,13 @@ class EasyFirstTransformer(object):
         for target, pred in zip(targets, preds):
           matches.append(tf.reduce_sum(nn.equal(target,pred)))
           totals.append(tf.reduce_sum(tf.ones_like(target)))
-      outputs['n_filter_correct'] = tf.add_n(matches)
-      outputs['n_filter_total'] = tf.add_n(totals)
+      #outputs['n_filter_correct'] = tf.add_n(matches)
+      #outputs['n_filter_total'] = tf.add_n(totals)
     if not self.predict_rel_in_attention:
       outputs['probabilities'] = tf.ones_like(outputs['unlabeled_probabilities'][0][0])
       if self.sample_policy == 'top_k':
         outputs['loss'] = outputs['filter_loss'] + outputs['unlabeled_loss']
+        #outputs['loss'] = outputs['unlabeled_loss']
       else:
         outputs['loss'] = outputs['unlabeled_loss']
 
@@ -749,6 +752,7 @@ def attention_layer(from_tensor,
                     remained_unlabeled_targets=None,
                     unlabeled_targets=None,
                     label_targets=None,
+                    k_target=None,
                     num_attention_heads=1,
                     size_per_head=512,
                     query_act=None,
@@ -931,6 +935,7 @@ def attention_layer(from_tensor,
                                           remained_unlabeled_targets=remained_unlabeled_targets, 
                                           unlabeled_targets=unlabeled_targets,
                                           label_targets=label_targets,
+                                          k_target=k_target,
                                           policy=config.sample_policy,
                                           use_biaffine=config.use_biaffine,
                                           arc_hidden_size = config.arc_hidden_size, rel_hidden_size = 512,
@@ -1003,6 +1008,7 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
                       remained_unlabeled_targets=None, 
                       unlabeled_targets=None,
                       label_targets=None,
+                      k_target=None,
                       use_biaffine=False, 
                       arc_hidden_size=512, rel_hidden_size=512,
                       num_sup_heads=1, max_top_heads=4, policy='random',
@@ -1126,9 +1132,14 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
       # if is equals to max_top_heads+1, it means EOS, all arcs are predicted
       k_pred = tf.cast(tf.argmax(filter_logits, -1), dtype=tf.int32)
       filter_predictions.append(k_pred)
+      zero = tf.zeros_like(k_pred)
+      eos_vec = tf.ones_like(k_pred) * (max_top_heads+1)
+      k_pred_mask = tf.where(tf.equal(k_pred, eos_vec), zero, k_pred)
+      
 
-      k_gold = sample_k(max_top_heads, allowed_heads, policy='random', logits=None)
-      filter_targets.append(k_gold)
+      #k_gold = sample_k(max_top_heads, allowed_heads, policy='random', logits=None)
+      k_gold = k_target
+      #filter_targets.append(k_gold)
 
       # [B], [B, max_top_heads+2] -> ()
       k_loss = tf.losses.sparse_softmax_cross_entropy(k_gold, filter_logits)
@@ -1145,7 +1156,7 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
 
       masked_adder = (1.0 - tf.cast(mask_with_null, tf.float32)) * -1e9
       # [B, F, T], top k pred heads
-      predicted_heads_3D = top_k_heads(supervised_logits + masked_adder, max_k=max_top_heads, k_batch=k_pred)
+      predicted_heads_3D = top_k_heads(supervised_logits + masked_adder, max_k=max_top_heads, k_batch=k_pred_mask)
       # [B, F, T], should select top k scores from this layer
       probability = supervised_logits + (1.0 - tf.cast(attention_mask, tf.float32)) * -1e9
     elif policy == 'random':
@@ -1183,10 +1194,13 @@ def easy_first_one_step(config, from_tensor_2d, to_tensor_2d,
       # [B, F, T]
       head_logp = tf.reshape(tf.nn.log_softmax(reshaped_logits, -1), tf.shape(supervised_logits))
       neg_inf_like_logp = tf.fill(tf.shape(head_logp), -1e9)
-      selected_gold_heads_logp = tf.where(tf.equal(selected_gold_heads_3D,1), head_logp, neg_inf_like_logp)
+      #selected_gold_heads_logp = tf.where(tf.equal(selected_gold_heads_3D,1), head_logp, neg_inf_like_logp)
+      selected_gold_heads_logp = tf.where(tf.equal(allowed_heads,1), head_logp, neg_inf_like_logp)
+      # number of heads in total
+      n_heads = tf.cast(tf.reduce_sum(allowed_heads), dtype=tf.float32)
       # [B]
       logp_selected_gold_heads = tf.reduce_logsumexp(selected_gold_heads_logp, axis=(1, 2))
-      loss = -tf.reduce_mean(logp_selected_gold_heads)
+      loss = - 1.0/(n_heads + 1.0) * tf.reduce_sum(logp_selected_gold_heads)
 
       arc_losses.append(loss)
       # [B, F, T] -> [B, F, T]
@@ -1570,6 +1584,7 @@ def easy_first_transformer_model(input_tensor,
                       attention_mask=None,
                       null_mask=None,
                       unlabeled_targets=None,
+                      k_targets=None,
                       label_targets=None,
                       hidden_size=512,
                       num_hidden_layers=6,
@@ -1679,6 +1694,10 @@ def easy_first_transformer_model(input_tensor,
       with tf.variable_scope("attention"):
         attention_heads = []
         with tf.variable_scope("self"):
+          if config.sample_policy == 'top_k':
+            k_target = k_targets[layer_idx]
+          else:
+            k_target = None
           attention_head, outputs_ = attention_layer(
               from_tensor=layer_input,
               to_tensor=layer_input,
@@ -1688,6 +1707,7 @@ def easy_first_transformer_model(input_tensor,
               remained_unlabeled_targets=remained_unlabeled_targets,
               unlabeled_targets=unlabeled_targets,
               label_targets=label_targets,
+              k_target=k_target,
               num_attention_heads=num_attention_heads,
               size_per_head=attention_head_size,
               attention_probs_dropout_prob=attention_probs_dropout_prob,

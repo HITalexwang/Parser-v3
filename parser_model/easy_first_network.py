@@ -176,11 +176,13 @@ class EasyFirstNetwork(BaseNetwork):
       #input_mask_3D = tf.expand_dims(root_weights, axis=-1) * tf.expand_dims(root_weights, axis=-2)
       unlabeled_targets = output_fields['semhead'].placeholder
       label_targets = output_fields['semrel'].placeholder
+      k_targets = output_fields['semhead'].k_placeholders
       transformer = easy_first_transformer.EasyFirstTransformer(config, not reuse, layer, 
                                                         input_mask=token_weights3D,
                                                         unlabeled_targets=unlabeled_targets,
                                                         label_targets=label_targets,
-                                                        null_mask=null_mask)
+                                                        null_mask=null_mask,
+                                                        k_targets=k_targets)
       if self.concat_all_layers:
         layers = transformer.get_all_encoder_layers()
         # shape = [batch_size, seq_len, hidden_size*n_layers]
